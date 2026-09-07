@@ -35,6 +35,21 @@
 #include <QVBoxLayout>
 #include <QtMath>
 
+namespace {
+const QColor kTextColor("#1f1d1a");
+const QColor kTitleColor("#171511");
+const QColor kCardBackground("#fbfaf7");
+const QColor kChartBackground("#f6f2ec");
+const QColor kGridColor("#e2ddd6");
+const QColor kMainLineColor("#4b4944");
+const QColor kAccentRed("#d84b35");
+const QColor kAccentRedDark("#a63325");
+const QColor kGuideLineColor("#c85a46");
+const QColor kAccentYellow("#f7d84a");
+const QColor kStripeBase("#d7d2cc");
+const QColor kStripeLine("#fbfaf7");
+}
+
 #ifdef QT_CHARTS_NAMESPACE
 using namespace QT_CHARTS_NAMESPACE;
 #endif
@@ -151,18 +166,18 @@ void DashboardPage::updateChart(int days)
 {
     auto *curve = new QSplineSeries();
     curve->setName("已完成订单营收");
-    curve->setPen(QPen(QColor("#2f6bff"), 2));
+    curve->setPen(QPen(kMainLineColor, 2));
 
     auto *pointsSeries = new QScatterSeries();
     pointsSeries->setName("每日营收");
     pointsSeries->setMarkerShape(QScatterSeries::MarkerShapeCircle);
     pointsSeries->setMarkerSize(8.5);
-    pointsSeries->setColor(QColor("#0f172a"));
-    pointsSeries->setBorderColor(QColor("#0f172a"));
+    pointsSeries->setColor(kTextColor);
+    pointsSeries->setBorderColor(kTextColor);
 
     auto *selectedVerticalLine = new QLineSeries();
     selectedVerticalLine->setName("选中点竖向指示线");
-    QPen guidePen(QColor("#2f6bff"), 1);
+    QPen guidePen(kGuideLineColor, 1);
     guidePen.setStyle(Qt::DashLine);
     selectedVerticalLine->setPen(guidePen);
 
@@ -174,8 +189,8 @@ void DashboardPage::updateChart(int days)
     selectedSeries->setName("选中点");
     selectedSeries->setMarkerShape(QScatterSeries::MarkerShapeCircle);
     selectedSeries->setMarkerSize(12);
-    selectedSeries->setColor(QColor("#2f6bff"));
-    selectedSeries->setBorderColor(QColor("#235fe8"));
+    selectedSeries->setColor(kAccentRed);
+    selectedSeries->setBorderColor(kAccentRedDark);
     selectedSeries->setPointLabelsVisible(false);
 
     const QList<RevenuePoint> points = service_->revenueTrend(days);
@@ -212,7 +227,7 @@ void DashboardPage::updateChart(int days)
     chart->legend()->setVisible(false);
     chart->setBackgroundVisible(false);
     chart->setPlotAreaBackgroundVisible(true);
-    chart->setPlotAreaBackgroundBrush(QBrush(QColor("#f8fbff")));
+    chart->setPlotAreaBackgroundBrush(QBrush(kChartBackground));
     chart->setTitle("");
     chart->setMargins(QMargins(2, 8, 10, 4));
 
@@ -235,7 +250,7 @@ void DashboardPage::updateChart(int days)
     axisY->setTickCount(axisMax / tickStep + 1);
     axisY->setLabelFormat("%.0f");
     axisY->setTitleText("");
-    axisY->setGridLineColor(QColor("#e2edf7"));
+    axisY->setGridLineColor(kGridColor);
 
     chart->addAxis(axisX, Qt::AlignBottom);
     chart->addAxis(axisY, Qt::AlignLeft);
@@ -253,13 +268,13 @@ void DashboardPage::updateChart(int days)
 
     if (!points.isEmpty()) {
         auto *badgeBox = new QGraphicsPathItem(chart);
-        badgeBox->setBrush(QBrush(QColor("#0f172a")));
-        badgeBox->setPen(QPen(QColor("#0f172a")));
+        badgeBox->setBrush(QBrush(kTitleColor));
+        badgeBox->setPen(QPen(kTitleColor));
         badgeBox->setZValue(20);
 
         auto *badgeText = new QGraphicsSimpleTextItem(
             QString("%1 元").arg(points[selectedRevenueIndex_].amount, 0, 'f', 0), chart);
-        badgeText->setBrush(QBrush(QColor("#ffffff")));
+        badgeText->setBrush(QBrush(QColor("#fffaf4")));
         badgeText->setFont(QFont("Segoe UI", 10, QFont::DemiBold));
         badgeText->setZValue(21);
 
@@ -363,11 +378,11 @@ void DashboardPage::updateDeviceSummary()
     series->setPieEndAngle(450);
 
     QPixmap stripePixmap(12, 12);
-    stripePixmap.fill(QColor("#d7d2cc"));
+    stripePixmap.fill(kStripeBase);
     {
         QPainter stripePainter(&stripePixmap);
         stripePainter.setRenderHint(QPainter::Antialiasing);
-        stripePainter.setPen(QPen(QColor("#fbfaf7"), 3));
+        stripePainter.setPen(QPen(kStripeLine, 3));
         stripePainter.drawLine(-2, 12, 12, -2);
         stripePainter.drawLine(4, 14, 14, 4);
     }
@@ -379,14 +394,14 @@ void DashboardPage::updateDeviceSummary()
         auto *slice = series->append(name, count);
         slice->setLabel(name);
         slice->setLabelVisible(false);
-        slice->setLabelColor(QColor("#1f1d1a"));
+        slice->setLabelColor(kTextColor);
         slice->setBrush(brush);
-        slice->setBorderColor(QColor("#fbfaf7"));
+        slice->setBorderColor(kCardBackground);
         slice->setBorderWidth(2);
     };
 
-    addSlice("空闲", summary.idleCount, QBrush(QColor("#dbeafe")));
-    addSlice("在用", summary.usingCount, QBrush(QColor("#94a3b8")));
+    addSlice("空闲", summary.idleCount, QBrush(kAccentYellow));
+    addSlice("在用", summary.usingCount, QBrush(QColor("#d7d2cc")));
     addSlice("故障", summary.faultCount, QBrush(stripePixmap));
 
     auto *chart = new QChart();
@@ -396,7 +411,7 @@ void DashboardPage::updateDeviceSummary()
     chart->setMargins(QMargins(0, 0, 0, 0));
     chart->legend()->setVisible(true);
     chart->legend()->setAlignment(Qt::AlignBottom);
-    chart->legend()->setLabelColor(QColor("#1f1d1a"));
+    chart->legend()->setLabelColor(kTextColor);
     chart->legend()->setMarkerShape(QLegend::MarkerShapeCircle);
     chart->setAnimationOptions(QChart::NoAnimation);
     deviceChartView_->setChart(chart);
