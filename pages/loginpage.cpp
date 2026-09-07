@@ -12,19 +12,21 @@ LoginPage::LoginPage(QWidget *parent)
     setObjectName("loginPage");
 
     auto *outer = new QVBoxLayout(this);
-    outer->setContentsMargins(0, 0, 0, 0);
+    outer->setContentsMargins(32, 32, 32, 32);
     outer->setAlignment(Qt::AlignCenter);
 
     auto *panel = new QWidget(this);
     panel->setObjectName("loginPanel");
     auto *layout = new QVBoxLayout(panel);
-    layout->setContentsMargins(36, 34, 36, 34);
-    layout->setSpacing(16);
+    layout->setContentsMargins(32, 30, 32, 30);
+    layout->setSpacing(14);
 
-    auto *title = new QLabel("运营管理端", panel);
+    auto *title = new QLabel("Gale Verdict", panel);
     title->setObjectName("loginTitle");
-    auto *subtitle = new QLabel("Gale Verdict 充电平台", panel);
+    title->setAlignment(Qt::AlignCenter);
+    auto *subtitle = new QLabel("运营管理端", panel);
     subtitle->setObjectName("loginSubtitle");
+    subtitle->setAlignment(Qt::AlignCenter);
 
     accountEdit_ = new QLineEdit(panel);
     accountEdit_->setPlaceholderText("管理员账号");
@@ -40,16 +42,23 @@ LoginPage::LoginPage(QWidget *parent)
     errorLabel_->setWordWrap(true);
     errorLabel_->hide();
 
+    auto *fieldHint = new QLabel("账号由平台统一开通，管理端不提供自助注册入口。", panel);
+    fieldHint->setObjectName("fieldHint");
+    fieldHint->setWordWrap(true);
+
     loginButton_ = new QPushButton("登录", panel);
     loginButton_->setObjectName("primaryButton");
     loginButton_->setMinimumHeight(40);
+    loginButton_->setDefault(true);
 
     layout->addWidget(title);
     layout->addWidget(subtitle);
-    layout->addSpacing(6);
+    layout->addSpacing(4);
     layout->addWidget(accountEdit_);
     layout->addWidget(passwordEdit_);
     layout->addWidget(errorLabel_);
+    layout->addWidget(fieldHint);
+    layout->addSpacing(2);
     layout->addWidget(loginButton_);
 
     outer->addWidget(panel);

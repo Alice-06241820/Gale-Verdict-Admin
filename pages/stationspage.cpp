@@ -5,6 +5,7 @@
 
 #include <QAbstractItemView>
 #include <QDoubleSpinBox>
+#include <QFrame>
 #include <QFormLayout>
 #include <QGridLayout>
 #include <QHeaderView>
@@ -23,7 +24,7 @@ StationsPage::StationsPage(AdminApiService *service, QWidget *parent)
 {
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(28, 24, 28, 28);
-    layout->setSpacing(14);
+    layout->setSpacing(16);
 
     auto *title = new QLabel("充电站管理", this);
     title->setObjectName("pageTitle");
@@ -35,27 +36,44 @@ StationsPage::StationsPage(AdminApiService *service, QWidget *parent)
     auto *content = new QGridLayout();
     content->setSpacing(16);
 
-    stationTable_ = new QTableWidget(this);
+    auto *stationPanel = new QWidget(this);
+    stationPanel->setObjectName("sectionPanel");
+    auto *stationLayout = new QVBoxLayout(stationPanel);
+    stationLayout->setContentsMargins(18, 16, 18, 18);
+    stationLayout->setSpacing(12);
+    auto *stationTitle = new QLabel("站点列表", stationPanel);
+    stationTitle->setObjectName("sectionTitle");
+    stationLayout->addWidget(stationTitle);
+
+    stationTable_ = new QTableWidget(stationPanel);
     stationTable_->setColumnCount(7);
     stationTable_->setHorizontalHeaderLabels({"电站ID", "站名", "地址", "纬度", "经度", "电桩总数", "在线率"});
-    stationTable_->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
-    stationTable_->horizontalHeader()->setStretchLastSection(false);
-    stationTable_->horizontalHeader()->setMinimumSectionSize(72);
+    auto *stationHeader = stationTable_->horizontalHeader();
+    stationHeader->setSectionResizeMode(QHeaderView::Interactive);
+    stationHeader->setSectionResizeMode(1, QHeaderView::Stretch);
+    stationHeader->setSectionResizeMode(2, QHeaderView::Stretch);
+    stationHeader->setStretchLastSection(false);
+    stationHeader->setMinimumSectionSize(72);
+    stationHeader->setDefaultAlignment(Qt::AlignCenter);
     stationTable_->verticalHeader()->setVisible(false);
+    stationTable_->setFrameShape(QFrame::NoFrame);
     stationTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
     stationTable_->setSelectionMode(QAbstractItemView::SingleSelection);
     stationTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
     stationTable_->setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);
     stationTable_->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    stationTable_->setShowGrid(false);
     stationTable_->setAlternatingRowColors(true);
-    stationTable_->setColumnWidth(0, 82);
-    stationTable_->setColumnWidth(1, 170);
-    stationTable_->setColumnWidth(2, 220);
-    stationTable_->setColumnWidth(3, 110);
-    stationTable_->setColumnWidth(4, 110);
-    stationTable_->setColumnWidth(5, 92);
-    stationTable_->setColumnWidth(6, 82);
-    content->addWidget(stationTable_, 0, 0, 2, 1);
+    stationTable_->verticalHeader()->setDefaultSectionSize(40);
+    stationTable_->setColumnWidth(0, 86);
+    stationTable_->setColumnWidth(1, 180);
+    stationTable_->setColumnWidth(2, 240);
+    stationTable_->setColumnWidth(3, 112);
+    stationTable_->setColumnWidth(4, 112);
+    stationTable_->setColumnWidth(5, 104);
+    stationTable_->setColumnWidth(6, 90);
+    stationLayout->addWidget(stationTable_, 1);
+    content->addWidget(stationPanel, 0, 0, 2, 1);
 
     auto *formPanel = new QWidget(this);
     formPanel->setObjectName("sectionPanel");
@@ -93,25 +111,44 @@ StationsPage::StationsPage(AdminApiService *service, QWidget *parent)
     formLayout->addRow(submitButton);
     content->addWidget(formPanel, 0, 1);
 
-    detailTable_ = new QTableWidget(this);
+    auto *detailPanel = new QWidget(this);
+    detailPanel->setObjectName("sectionPanel");
+    auto *detailLayout = new QVBoxLayout(detailPanel);
+    detailLayout->setContentsMargins(18, 16, 18, 18);
+    detailLayout->setSpacing(12);
+    auto *detailTitle = new QLabel("站内电桩", detailPanel);
+    detailTitle->setObjectName("sectionTitle");
+    detailLayout->addWidget(detailTitle);
+
+    detailTable_ = new QTableWidget(detailPanel);
     detailTable_->setColumnCount(5);
     detailTable_->setHorizontalHeaderLabels({"电桩编号", "类型", "功率(kW)", "状态", "累计时长(h)"});
-    detailTable_->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
-    detailTable_->horizontalHeader()->setStretchLastSection(false);
-    detailTable_->horizontalHeader()->setMinimumSectionSize(72);
+    auto *detailHeader = detailTable_->horizontalHeader();
+    detailHeader->setSectionResizeMode(QHeaderView::Interactive);
+    detailHeader->setSectionResizeMode(0, QHeaderView::Stretch);
+    detailHeader->setSectionResizeMode(4, QHeaderView::Stretch);
+    detailHeader->setStretchLastSection(false);
+    detailHeader->setMinimumSectionSize(72);
+    detailHeader->setDefaultAlignment(Qt::AlignCenter);
     detailTable_->verticalHeader()->setVisible(false);
+    detailTable_->setFrameShape(QFrame::NoFrame);
     detailTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
     detailTable_->setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);
     detailTable_->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    detailTable_->setShowGrid(false);
     detailTable_->setAlternatingRowColors(true);
+    detailTable_->verticalHeader()->setDefaultSectionSize(40);
     detailTable_->setColumnWidth(0, 110);
     detailTable_->setColumnWidth(1, 72);
-    detailTable_->setColumnWidth(2, 88);
+    detailTable_->setColumnWidth(2, 94);
     detailTable_->setColumnWidth(3, 72);
-    detailTable_->setColumnWidth(4, 104);
-    content->addWidget(detailTable_, 1, 1);
-    content->setColumnStretch(0, 2);
-    content->setColumnStretch(1, 1);
+    detailTable_->setColumnWidth(4, 118);
+    detailLayout->addWidget(detailTable_, 1);
+    content->addWidget(detailPanel, 1, 1);
+    content->setColumnStretch(0, 5);
+    content->setColumnStretch(1, 3);
+    content->setRowStretch(0, 1);
+    content->setRowStretch(1, 1);
 
     layout->addLayout(content, 1);
 
@@ -153,6 +190,7 @@ void StationsPage::fillStationTable()
         };
         for (int col = 0; col < values.size(); ++col) {
             auto *item = new QTableWidgetItem(values[col]);
+            item->setTextAlignment(Qt::AlignCenter);
             item->setToolTip(values[col]);
             stationTable_->setItem(row, col, item);
         }
@@ -183,6 +221,7 @@ void StationsPage::fillDetailTable(int stationRow)
         };
         for (int col = 0; col < values.size(); ++col) {
             auto *item = new QTableWidgetItem(values[col]);
+            item->setTextAlignment(Qt::AlignCenter);
             item->setToolTip(values[col]);
             detailTable_->setItem(row, col, item);
         }

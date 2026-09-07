@@ -2,4 +2,8 @@
     <qresource prefix="/">
         <file>styles/style.qss</file>
     </qresource>
+    <qresource prefix="/icons">
+        <file>chevron-down.png</file>
+        <file>chevron-up.png</file>
+    </qresource>
 </RCC>

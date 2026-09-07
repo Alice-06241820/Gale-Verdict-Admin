@@ -35,6 +35,10 @@
 #include <QVBoxLayout>
 #include <QtMath>
 
+#ifdef QT_CHARTS_NAMESPACE
+using namespace QT_CHARTS_NAMESPACE;
+#endif
+
 DashboardPage::DashboardPage(AdminApiService *service, QWidget *parent)
     : QWidget(parent)
     , service_(service)
@@ -147,18 +151,18 @@ void DashboardPage::updateChart(int days)
 {
     auto *curve = new QSplineSeries();
     curve->setName("已完成订单营收");
-    curve->setPen(QPen(QColor("#4b4944"), 2));
+    curve->setPen(QPen(QColor("#2f6bff"), 2));
 
     auto *pointsSeries = new QScatterSeries();
     pointsSeries->setName("每日营收");
     pointsSeries->setMarkerShape(QScatterSeries::MarkerShapeCircle);
     pointsSeries->setMarkerSize(8.5);
-    pointsSeries->setColor(QColor("#171511"));
-    pointsSeries->setBorderColor(QColor("#171511"));
+    pointsSeries->setColor(QColor("#0f172a"));
+    pointsSeries->setBorderColor(QColor("#0f172a"));
 
     auto *selectedVerticalLine = new QLineSeries();
     selectedVerticalLine->setName("选中点竖向指示线");
-    QPen guidePen(QColor("#c85a46"), 1);
+    QPen guidePen(QColor("#2f6bff"), 1);
     guidePen.setStyle(Qt::DashLine);
     selectedVerticalLine->setPen(guidePen);
 
@@ -170,8 +174,8 @@ void DashboardPage::updateChart(int days)
     selectedSeries->setName("选中点");
     selectedSeries->setMarkerShape(QScatterSeries::MarkerShapeCircle);
     selectedSeries->setMarkerSize(12);
-    selectedSeries->setColor(QColor("#d84b35"));
-    selectedSeries->setBorderColor(QColor("#a63325"));
+    selectedSeries->setColor(QColor("#2f6bff"));
+    selectedSeries->setBorderColor(QColor("#235fe8"));
     selectedSeries->setPointLabelsVisible(false);
 
     const QList<RevenuePoint> points = service_->revenueTrend(days);
@@ -208,7 +212,7 @@ void DashboardPage::updateChart(int days)
     chart->legend()->setVisible(false);
     chart->setBackgroundVisible(false);
     chart->setPlotAreaBackgroundVisible(true);
-    chart->setPlotAreaBackgroundBrush(QBrush(QColor("#f6f2ec")));
+    chart->setPlotAreaBackgroundBrush(QBrush(QColor("#f8fbff")));
     chart->setTitle("");
     chart->setMargins(QMargins(2, 8, 10, 4));
 
@@ -231,7 +235,7 @@ void DashboardPage::updateChart(int days)
     axisY->setTickCount(axisMax / tickStep + 1);
     axisY->setLabelFormat("%.0f");
     axisY->setTitleText("");
-    axisY->setGridLineColor(QColor("#e2ddd6"));
+    axisY->setGridLineColor(QColor("#e2edf7"));
 
     chart->addAxis(axisX, Qt::AlignBottom);
     chart->addAxis(axisY, Qt::AlignLeft);
@@ -249,13 +253,13 @@ void DashboardPage::updateChart(int days)
 
     if (!points.isEmpty()) {
         auto *badgeBox = new QGraphicsPathItem(chart);
-        badgeBox->setBrush(QBrush(QColor("#171511")));
-        badgeBox->setPen(QPen(QColor("#171511")));
+        badgeBox->setBrush(QBrush(QColor("#0f172a")));
+        badgeBox->setPen(QPen(QColor("#0f172a")));
         badgeBox->setZValue(20);
 
         auto *badgeText = new QGraphicsSimpleTextItem(
             QString("%1 元").arg(points[selectedRevenueIndex_].amount, 0, 'f', 0), chart);
-        badgeText->setBrush(QBrush(QColor("#fffaf4")));
+        badgeText->setBrush(QBrush(QColor("#ffffff")));
         badgeText->setFont(QFont("Segoe UI", 10, QFont::DemiBold));
         badgeText->setZValue(21);
 
@@ -381,8 +385,8 @@ void DashboardPage::updateDeviceSummary()
         slice->setBorderWidth(2);
     };
 
-    addSlice("空闲", summary.idleCount, QBrush(QColor("#f7d84a")));
-    addSlice("在用", summary.usingCount, QBrush(QColor("#d7d2cc")));
+    addSlice("空闲", summary.idleCount, QBrush(QColor("#dbeafe")));
+    addSlice("在用", summary.usingCount, QBrush(QColor("#94a3b8")));
     addSlice("故障", summary.faultCount, QBrush(stripePixmap));
 
     auto *chart = new QChart();

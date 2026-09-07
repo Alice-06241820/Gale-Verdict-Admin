@@ -4,11 +4,17 @@
 #include "model/adminmodels.h"
 
 #include <QWidget>
+#include <QtCharts/QChartView>
 
 class AdminApiService;
 class QLabel;
 class QComboBox;
-class QChartView;
+
+#ifdef QT_CHARTS_NAMESPACE
+using DashboardChartView = QT_CHARTS_NAMESPACE::QChartView;
+#else
+using DashboardChartView = QChartView;
+#endif
 
 class DashboardPage : public QWidget
 {
@@ -30,8 +36,8 @@ private:
     QLabel *monthRevenue_ = nullptr;
     QLabel *totalRevenue_ = nullptr;
     QComboBox *rangeBox_ = nullptr;
-    QChartView *chartView_ = nullptr;
-    QChartView *deviceChartView_ = nullptr;
+    DashboardChartView *chartView_ = nullptr;
+    DashboardChartView *deviceChartView_ = nullptr;
     QLabel *chartHint_ = nullptr;
     int selectedRevenueIndex_ = -1;
 };

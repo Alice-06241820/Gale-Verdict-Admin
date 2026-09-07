@@ -17,8 +17,8 @@ MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
     setWindowTitle("Gale Verdict 运营管理端");
-    resize(1180, 760);
-    setMinimumSize(980, 640);
+    resize(1260, 820);
+    setMinimumSize(1040, 700);
 
     loginPage_ = new LoginPage(this);
     loginContainer_ = loginPage_;
@@ -39,7 +39,7 @@ QPushButton *MainWindow::createNavButton(const QString &text, PageIndex page)
     auto *button = new QPushButton(text, this);
     button->setObjectName("navButton");
     button->setCheckable(true);
-    button->setMinimumHeight(38);
+    button->setMinimumHeight(42);
     navButtons_.append(button);
     connect(button, &QPushButton::clicked, this, [this, page]() {
         setPage(page);
@@ -58,10 +58,10 @@ void MainWindow::showShell()
 
     auto *sidebar = new QWidget(shellContainer_);
     sidebar->setObjectName("sidebar");
-    sidebar->setFixedWidth(220);
+    sidebar->setFixedWidth(240);
     auto *sideLayout = new QVBoxLayout(sidebar);
-    sideLayout->setContentsMargins(18, 22, 18, 18);
-    sideLayout->setSpacing(10);
+    sideLayout->setContentsMargins(20, 24, 20, 20);
+    sideLayout->setSpacing(8);
 
     auto *brand = new QLabel("Gale Verdict", sidebar);
     brand->setObjectName("brandTitle");
@@ -86,10 +86,10 @@ void MainWindow::showShell()
     chargersPage_ = new ChargersPage(&api_, stack_);
     stationsPage_ = new StationsPage(&api_, stack_);
     usersPage_ = new UsersPage(&api_, stack_);
-    stack_->addWidget(dashboardPage_);
-    stack_->addWidget(chargersPage_);
-    stack_->addWidget(stationsPage_);
-    stack_->addWidget(usersPage_);
+    stack_->addWidget(static_cast<QWidget *>(dashboardPage_));
+    stack_->addWidget(static_cast<QWidget *>(chargersPage_));
+    stack_->addWidget(static_cast<QWidget *>(stationsPage_));
+    stack_->addWidget(static_cast<QWidget *>(usersPage_));
 
     root->addWidget(sidebar);
     root->addWidget(stack_, 1);
