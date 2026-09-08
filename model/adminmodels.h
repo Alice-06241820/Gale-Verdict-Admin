@@ -39,6 +39,7 @@ struct ChargerInfo
     QString status;
     int totalSessions = 0;
     double totalHours = 0.0;
+    int stationId = 0;
 };
 
 struct StationInfo

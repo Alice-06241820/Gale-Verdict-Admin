@@ -2,6 +2,7 @@
 
 #include <QDate>
 #include <QEventLoop>
+#include <QHash>
 #include <QJsonArray>
 #include <QNetworkReply>
 #include <QNetworkRequest>
@@ -72,13 +73,35 @@ bool AdminApiService::login(const QString &account, const QString &password, QSt
 
 RevenueSummary AdminApiService::revenueSummary() const
 {
-    // TODO(后端)：替换为 GET /api/admin/revenue/summary。
+    bool ok = false;
+    const QJsonDocument doc = getJson("/api/admin/revenue/summary", &ok);
+    if (ok && doc.isObject()) {
+        const QJsonObject data = doc.object();
+        return {data.value("today").toDouble(),
+                data.value("month").toDouble(),
+                data.value("total").toDouble()};
+    }
     return {386.50, 12480.80, 96842.20};
 }
 
 QList<RevenuePoint> AdminApiService::revenueTrend(int days) const
 {
-    // TODO(后端)：替换为 GET /api/admin/revenue/trend?days=7/30。
+    bool ok = false;
+    const QJsonDocument doc = getJson(QString("/api/admin/revenue/trend?days=%1").arg(days), &ok);
+    if (ok && doc.isArray()) {
+        QList<RevenuePoint> result;
+        const QJsonArray rows = doc.array();
+        for (const QJsonValue &value : rows) {
+            if (!value.isObject()) {
+                continue;
+            }
+            const QJsonObject row = value.toObject();
+            result.append({QDate::fromString(row.value("date").toString(), Qt::ISODate),
+                           row.value("revenue").toDouble()});
+        }
+        return result;
+    }
+
     QList<RevenuePoint> points;
     const QDate today = QDate::currentDate();
     for (int i = days - 1; i >= 0; --i) {
@@ -91,6 +114,17 @@ QList<RevenuePoint> AdminApiService::revenueTrend(int days) const
 
 DeviceStatusSummary AdminApiService::deviceStatusSummary() const
 {
+    bool statsOk = false;
+    const QJsonDocument doc = getJson("/api/charging-points/statistics", &statsOk);
+    if (statsOk && doc.isObject()) {
+        const QJsonObject data = doc.object();
+        DeviceStatusSummary summary;
+        summary.usingCount = data.value("working").toObject().value("count").toInt();
+        summary.idleCount = data.value("free").toObject().value("count").toInt();
+        summary.faultCount = data.value("broken").toObject().value("count").toInt();
+        return summary;
+    }
+
     DeviceStatusSummary summary;
     bool ok = false;
     const QList<StationInfo> rows = backendStations(&ok);
@@ -111,14 +145,17 @@ DeviceStatusSummary AdminApiService::deviceStatusSummary() const
 
 QList<ChargerInfo> AdminApiService::chargers() const
 {
-    QList<ChargerInfo> result;
     bool ok = false;
-    const QList<StationInfo> rows = backendStations(&ok);
-    const QList<StationInfo> source = ok ? rows : stations_;
-    for (const StationInfo &station : source) {
-        result.append(station.chargers);
+    const QList<ChargerInfo> rows = backendChargers(&ok);
+    if (ok) {
+        return rows;
     }
-    return result;
+
+    QList<ChargerInfo> fallback;
+    for (const StationInfo &station : stations_) {
+        fallback.append(station.chargers);
+    }
+    return fallback;
 }
 
 bool AdminApiService::restartCharger(const QString &chargerId, QString *message)
@@ -255,7 +292,36 @@ bool AdminApiService::addStation(const QString &name,
 
 QList<UserInfo> AdminApiService::users(const QString &phoneKeyword) const
 {
-    // TODO(后端)：替换为 GET /api/admin/users?phone=。
+    if (!token_.isEmpty()) {
+        const QString keyword = phoneKeyword.trimmed();
+        QString path = "/api/admin/users";
+        if (!keyword.isEmpty()) {
+            path += "?phone=" + QString::fromUtf8(QUrl::toPercentEncoding(keyword));
+        }
+
+        bool ok = false;
+        const QJsonDocument doc = getJson(path, &ok);
+        if (ok && doc.isArray()) {
+            QList<UserInfo> result;
+            const QJsonArray rows = doc.array();
+            for (const QJsonValue &value : rows) {
+                if (!value.isObject()) {
+                    continue;
+                }
+                const QJsonObject row = value.toObject();
+                UserInfo user;
+                user.id = row.value("id").toInt();
+                user.phone = row.value("phone").toString();
+                user.nickname = row.value("username").toString();
+                user.balance = row.value("balance").toDouble();
+                user.registeredAt = QDateTime::fromSecsSinceEpoch(row.value("created_at").toInteger());
+                user.status = userStatusToText(row.value("status").toString());
+                result.append(user);
+            }
+            return result;
+        }
+    }
+
     if (phoneKeyword.trimmed().isEmpty()) {
         return users_;
     }
@@ -271,7 +337,21 @@ QList<UserInfo> AdminApiService::users(const QString &phoneKeyword) const
 
 bool AdminApiService::setUserFrozen(int userId, bool frozen, QString *message)
 {
-    // TODO(后端)：替换为 POST /api/admin/users/{id}/status。
+    if (!token_.isEmpty()) {
+        QJsonObject body;
+        body["status"] = frozen ? QString("frozen") : QString("active");
+
+        bool ok = false;
+        postJson(QString("/api/admin/users/%1/status").arg(userId), body, &ok, message);
+        if (ok) {
+            if (message) {
+                *message = frozen ? "用户已冻结" : "用户已解冻";
+            }
+            return true;
+        }
+        return false;
+    }
+
     for (UserInfo &user : users_) {
         if (user.id == userId) {
             const QString targetStatus = frozen ? "冻结" : "正常";
@@ -448,6 +528,46 @@ QJsonDocument AdminApiService::sendJson(const QString &method,
     return doc;
 }
 
+QList<ChargerInfo> AdminApiService::backendChargers(bool *ok) const
+{
+    if (ok) {
+        *ok = false;
+    }
+    if (token_.isEmpty()) {
+        return {};
+    }
+
+    bool requestOk = false;
+    const QJsonDocument doc = getJson("/api/charging-points", &requestOk);
+    if (!requestOk || !doc.isArray()) {
+        return {};
+    }
+
+    QList<ChargerInfo> rows;
+    const QJsonArray points = doc.array();
+    for (const QJsonValue &value : points) {
+        if (!value.isObject()) {
+            continue;
+        }
+        const QJsonObject pointJson = value.toObject();
+        ChargerInfo charger;
+        charger.id = QString::number(pointJson.value("id").toInt());
+        charger.stationId = pointJson.value("charging_station_id").toInt();
+        charger.stationName = pointJson.value("charging_station_name").toString();
+        charger.type = pointTypeToText(pointJson.value("type").toString());
+        charger.powerKw = pointJson.value("power_kw").toDouble();
+        charger.status = statusToText(pointJson.value("status").toString());
+        charger.totalSessions = pointJson.value("usage_count").toInt();
+        charger.totalHours = pointJson.value("usage_duration_seconds").toDouble() / 3600.0;
+        rows.append(charger);
+    }
+
+    if (ok) {
+        *ok = true;
+    }
+    return rows;
+}
+
 QList<StationInfo> AdminApiService::backendStations(bool *ok) const
 {
     if (ok) {
@@ -461,6 +581,16 @@ QList<StationInfo> AdminApiService::backendStations(bool *ok) const
     const QJsonDocument doc = getJson("/api/charging-stations", &stationsOk);
     if (!stationsOk || !doc.isArray()) {
         return {};
+    }
+
+    bool chargersOk = false;
+    const QList<ChargerInfo> chargers = backendChargers(&chargersOk);
+
+    QHash<int, QList<ChargerInfo>> chargersByStation;
+    if (chargersOk) {
+        for (const ChargerInfo &charger : chargers) {
+            chargersByStation[charger.stationId].append(charger);
+        }
     }
 
     QList<StationInfo> rows;
@@ -478,25 +608,30 @@ QList<StationInfo> AdminApiService::backendStations(bool *ok) const
         station.longitude = stationJson.value("longitude").toDouble();
         station.price = 0.0;
 
-        bool pointsOk = false;
-        const QJsonDocument pointsDoc = getJson(QString("/api/charging-stations/%1/points").arg(station.id),
-                                                &pointsOk);
-        if (pointsOk && pointsDoc.isArray()) {
-            const QJsonArray points = pointsDoc.array();
-            for (const QJsonValue &pointValue : points) {
-                if (!pointValue.isObject()) {
-                    continue;
+        if (chargersOk) {
+            station.chargers = chargersByStation.value(station.id);
+        } else {
+            bool pointsOk = false;
+            const QJsonDocument pointsDoc = getJson(QString("/api/charging-stations/%1/points").arg(station.id),
+                                                    &pointsOk);
+            if (pointsOk && pointsDoc.isArray()) {
+                const QJsonArray points = pointsDoc.array();
+                for (const QJsonValue &pointValue : points) {
+                    if (!pointValue.isObject()) {
+                        continue;
+                    }
+                    const QJsonObject pointJson = pointValue.toObject();
+                    ChargerInfo charger;
+                    charger.id = QString::number(pointJson.value("id").toInt());
+                    charger.stationId = station.id;
+                    charger.stationName = station.name;
+                    charger.type = "后端未返回";
+                    charger.powerKw = 0.0;
+                    charger.status = statusToText(pointJson.value("status").toString());
+                    charger.totalSessions = 0;
+                    charger.totalHours = 0.0;
+                    station.chargers.append(charger);
                 }
-                const QJsonObject pointJson = pointValue.toObject();
-                ChargerInfo charger;
-                charger.id = QString::number(pointJson.value("id").toInt());
-                charger.stationName = station.name;
-                charger.type = "后端未返回";
-                charger.powerKw = 0.0;
-                charger.status = statusToText(pointJson.value("status").toString());
-                charger.totalSessions = 0;
-                charger.totalHours = 0.0;
-                station.chargers.append(charger);
             }
         }
         rows.append(station);
@@ -517,4 +652,23 @@ QString AdminApiService::statusToText(const QString &status) const
         return "故障";
     }
     return "空闲";
+}
+
+QString AdminApiService::pointTypeToText(const QString &type) const
+{
+    if (type == "DC") {
+        return "快充";
+    }
+    if (type == "AC") {
+        return "慢充";
+    }
+    return type.isEmpty() ? "未知" : type;
+}
+
+QString AdminApiService::userStatusToText(const QString &status) const
+{
+    if (status == "frozen") {
+        return "冻结";
+    }
+    return "正常";
 }

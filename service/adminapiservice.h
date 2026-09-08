@@ -48,8 +48,11 @@ private:
                            const QJsonObject *body,
                            bool *ok,
                            QString *errorMessage) const;
+    QList<ChargerInfo> backendChargers(bool *ok = nullptr) const;
     QList<StationInfo> backendStations(bool *ok = nullptr) const;
     QString statusToText(const QString &status) const;
+    QString pointTypeToText(const QString &type) const;
+    QString userStatusToText(const QString &status) const;
 
     QString baseUrl_ = "http://127.0.0.1:5555";
     QString token_;
