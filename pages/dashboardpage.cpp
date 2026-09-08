@@ -62,7 +62,7 @@ const QColor kAccentYellow("#f7d84a");
 const QColor kStripeBase("#d7d2cc");
 const QColor kStripeLine("#fbfaf7");
 const qreal kHoverScale = 1.06;
-const qreal kGapPx = 5.0;
+const qreal kGapPx = 6.0;
 const qreal kHoverAnimationDurationMs = 240.0;
 
 struct DonutSlice {
@@ -116,19 +116,33 @@ QPointF pointOnCircle(const QPointF &center, qreal radius, qreal degrees)
                    center.y() - std::sin(radians) * radius);
 }
 
-QPainterPath buildDonutSliceArcPath(const QPointF &center,
-                                    qreal radius,
-                                    qreal startAngle,
-                                    qreal span)
+QPainterPath buildDonutSlicePath(const QPointF &center,
+                                 qreal outerRadius,
+                                 qreal innerRadius,
+                                 qreal startAngle,
+                                 qreal span)
 {
     QPainterPath path;
-    if (span <= 0.0 || radius <= 0.0) {
+    if (span <= 0.0 || outerRadius <= 0.0 || innerRadius <= 0.0 || outerRadius <= innerRadius) {
         return path;
     }
 
-    const QRectF arcRect(center.x() - radius, center.y() - radius, radius * 2.0, radius * 2.0);
-    path.moveTo(pointOnCircle(center, radius, startAngle));
-    path.arcTo(arcRect, startAngle, -span);
+    const QRectF outerRect(center.x() - outerRadius,
+                           center.y() - outerRadius,
+                           outerRadius * 2.0,
+                           outerRadius * 2.0);
+    const QRectF innerRect(center.x() - innerRadius,
+                           center.y() - innerRadius,
+                           innerRadius * 2.0,
+                           innerRadius * 2.0);
+    const qreal endAngle = startAngle - span;
+
+    path.moveTo(pointOnCircle(center, outerRadius, startAngle));
+    path.arcTo(outerRect, startAngle, -span);
+    path.lineTo(pointOnCircle(center, innerRadius, endAngle));
+    path.arcTo(innerRect, endAngle, span);
+    path.lineTo(pointOnCircle(center, outerRadius, startAngle));
+    path.closeSubpath();
     return path;
 }
 
@@ -185,7 +199,7 @@ protected:
         const qreal innerRadius = outerRadius * 0.42;
         const QPointF center = area.center();
         const qreal baseStart = 90.0;
-        const qreal gapDegrees = sliceGapDegrees((outerRadius + innerRadius) / 2.0);
+        const qreal gapDegrees = 0.0;
 
         QFont titleFont = font();
         titleFont.setPointSize(qMax(9, titleFont.pointSize()));
@@ -197,6 +211,7 @@ protected:
 
         drawSlices(&painter, center, outerRadius, innerRadius, baseStart, gapDegrees, false);
         drawSlices(&painter, center, outerRadius, innerRadius, baseStart, gapDegrees, true);
+        drawSeparators(&painter, center, outerRadius, innerRadius, baseStart);
 
         drawDetailCard(&painter, center, outerRadius, baseStart, gapDegrees, titleFont, detailFont);
         drawLegend(&painter);
@@ -275,19 +290,47 @@ private:
             const qreal scale = hovered ? hoverScale_ : 1.0;
             const qreal pieceOuter = outerRadius * scale;
             const qreal pieceInner = innerRadius * scale;
-            const qreal pieceThickness = qMax<qreal>(1.0, pieceOuter - pieceInner);
-            const qreal pieceRadius = (pieceOuter + pieceInner) / 2.0;
-            const QPainterPath path = buildDonutSliceArcPath(center, pieceRadius, current, revealed);
+            const QPainterPath path = buildDonutSlicePath(center, pieceOuter, pieceInner, current, revealed);
 
             painter->save();
             painter->setOpacity(activeIndex_ >= 0 && i != activeIndex_ ? 0.58 : 1.0);
-            painter->setBrush(Qt::NoBrush);
-            painter->setPen(QPen(slice.brush, pieceThickness, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+            painter->setBrush(slice.brush);
+            painter->setPen(Qt::NoPen);
             painter->drawPath(path);
             painter->restore();
             consumed += fullSpan;
             current -= fullSpan;
         }
+    }
+
+    void drawSeparators(QPainter *painter,
+                        const QPointF &center,
+                        qreal outerRadius,
+                        qreal innerRadius,
+                        qreal baseStart)
+    {
+        if (revealProgress_ < 0.98) {
+            return;
+        }
+
+        painter->save();
+        painter->setRenderHint(QPainter::Antialiasing);
+        painter->setPen(QPen(kCardBackground, kGapPx, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        const qreal separatorOuterRadius = outerRadius * (activeIndex_ >= 0 ? hoverScale_ : 1.0);
+
+        qreal current = baseStart;
+        for (int i = 0; i < slices_.size(); ++i) {
+            if (slices_[i].value <= 0) {
+                continue;
+            }
+
+            const qreal fullSpan = 360.0 * slices_[i].value / total_;
+            const QPointF outer = pointOnCircle(center, separatorOuterRadius - kGapPx * 0.35, current);
+            const QPointF inner = pointOnCircle(center, innerRadius + kGapPx * 0.35, current);
+            painter->drawLine(inner, outer);
+            current -= fullSpan;
+        }
+        painter->restore();
     }
 
     void startRevealAnimation()
@@ -346,25 +389,26 @@ private:
         const QColor borderColor("#171511");
 
         const QString title = slices_[index].label;
-        const QString detailLine = QStringLiteral("%1 台 · %2%")
-                                       .arg(slices_[index].value)
-                                       .arg(100.0 * slices_[index].value / total_, 0, 'f', 1);
+        const QString valueLine = QStringLiteral("数量：%1 台").arg(slices_[index].value);
+        const QString percentLine = QStringLiteral("占比：%1%")
+                                        .arg(100.0 * slices_[index].value / total_, 0, 'f', 1);
         const QFontMetrics titleMetrics(titleFont);
         const QFontMetrics detailMetrics(detailFont);
-        const qreal maxCardWidth = qMin<qreal>(qMax<qreal>(74.0, width() - 28.0), 92.0);
+        const qreal maxCardWidth = qMin<qreal>(qMax<qreal>(86.0, width() - 28.0), 100.0);
         const qreal textMaxWidth = maxCardWidth - 16.0;
         const QRect titleBounds = titleMetrics.boundingRect(QRect(0, 0, static_cast<int>(textMaxWidth), 400), Qt::TextWordWrap, title);
-        const qreal detailWidth = textWidth(detailMetrics, detailLine);
-        qreal cardWidth = qMax<qreal>(74.0, qMax<qreal>(titleBounds.width(), detailWidth) + 16.0);
+        const qreal detailWidth = qMax(textWidth(detailMetrics, valueLine), textWidth(detailMetrics, percentLine));
+        qreal cardWidth = qMax<qreal>(86.0, qMax<qreal>(titleBounds.width(), detailWidth) + 16.0);
         cardWidth = qMin(cardWidth, maxCardWidth);
 
         const QRect finalTitleBounds = titleMetrics.boundingRect(QRect(0, 0, static_cast<int>(cardWidth - 16.0), 400), Qt::TextWordWrap, title);
         const qreal lineHeight = detailMetrics.height();
-        const qreal cardHeight = 13.0 + finalTitleBounds.height() + lineHeight;
+        const qreal cardHeight = 14.0 + finalTitleBounds.height() + lineHeight * 2.0;
 
         const qreal midAngle = sliceMidAngle(index, baseStart, gapDegrees);
-        const QPointF anchor = pointOnCircle(center, outerRadius + 3.5, midAngle);
-        const QRectF bounds = rect().adjusted(10, 8, -10, -24);
+        const QPointF anchor = pointOnCircle(center, outerRadius + 1.0, midAngle);
+        const qreal detailBottom = qMin<qreal>(height() - 24.0, legendTopY() - 8.0);
+        const QRectF bounds(10.0, 8.0, width() - 20.0, qMax<qreal>(cardHeight, detailBottom - 8.0));
         QRectF box = bestDetailCardRect(center, outerRadius, anchor, cardWidth, cardHeight, bounds);
 
         painter->save();
@@ -391,7 +435,11 @@ private:
         painter->setPen(mutedTextColor);
         painter->drawText(QRectF(box.left() + padX, y, box.width() - padX * 2.0, lineHeight),
                           Qt::AlignLeft | Qt::AlignVCenter,
-                          detailLine);
+                          valueLine);
+        y += lineHeight;
+        painter->drawText(QRectF(box.left() + padX, y, box.width() - padX * 2.0, lineHeight),
+                          Qt::AlignLeft | Qt::AlignVCenter,
+                          percentLine);
         painter->restore();
     }
 
@@ -423,7 +471,7 @@ private:
             const qreal nearestY = qBound(rect.top(), center.y(), rect.bottom());
             const qreal dx = nearestX - center.x();
             const qreal dy = nearestY - center.y();
-            return std::hypot(dx, dy) < outerRadius + 2.0;
+            return std::hypot(dx, dy) < outerRadius + 1.5;
         };
 
         auto score = [anchor](const QRectF &rect) {
@@ -433,10 +481,10 @@ private:
         };
 
         QList<QRectF> candidates;
-        candidates.append(QRectF(anchor.x() + 3.5, anchor.y() - cardHeight / 2.0, cardWidth, cardHeight));
-        candidates.append(QRectF(anchor.x() - cardWidth - 3.5, anchor.y() - cardHeight / 2.0, cardWidth, cardHeight));
-        candidates.append(QRectF(anchor.x() - cardWidth / 2.0, anchor.y() - cardHeight - 3.5, cardWidth, cardHeight));
-        candidates.append(QRectF(anchor.x() - cardWidth / 2.0, anchor.y() + 3.5, cardWidth, cardHeight));
+        candidates.append(QRectF(anchor.x() + 1.0, anchor.y() - cardHeight / 2.0, cardWidth, cardHeight));
+        candidates.append(QRectF(anchor.x() - cardWidth - 1.0, anchor.y() - cardHeight / 2.0, cardWidth, cardHeight));
+        candidates.append(QRectF(anchor.x() - cardWidth / 2.0, anchor.y() - cardHeight - 1.0, cardWidth, cardHeight));
+        candidates.append(QRectF(anchor.x() - cardWidth / 2.0, anchor.y() + 1.0, cardWidth, cardHeight));
         candidates.append(QRectF(bounds.left(), bounds.top(), cardWidth, cardHeight));
         candidates.append(QRectF(bounds.right() - cardWidth, bounds.top(), cardWidth, cardHeight));
         candidates.append(QRectF(bounds.left(), bounds.bottom() - cardHeight, cardWidth, cardHeight));
@@ -490,6 +538,41 @@ private:
             current -= fullSpan;
         }
         return baseStart;
+    }
+
+    qreal legendTopY() const
+    {
+        QFont legendFont = font();
+        legendFont.setPointSize(qMax(9, legendFont.pointSize() - 1));
+        const QFontMetrics fm(legendFont);
+
+        const qreal maxWidth = width() - 44.0;
+        qreal x = 22.0;
+        qreal y = height() - 16.0;
+        qreal top = y - 11.0;
+        bool firstInRow = true;
+        for (const auto &slice : slices_) {
+            if (slice.value <= 0) {
+                continue;
+            }
+
+            const qreal textMaxWidth = 132.0;
+            const QRect labelBounds = fm.boundingRect(QRect(0, 0, static_cast<int>(textMaxWidth), 120),
+                                                      Qt::TextWordWrap,
+                                                      slice.label);
+            const qreal itemWidth = 10.0 + 6.0 + labelBounds.width() + 18.0;
+            if (!firstInRow && x + itemWidth > maxWidth + 22.0) {
+                x = 22.0;
+                y -= qMax<qreal>(18.0, labelBounds.height() + 2.0);
+                firstInRow = true;
+            }
+
+            top = qMin(top, y - 11.0);
+            x += 14.0 + labelBounds.width() + 18.0;
+            firstInRow = false;
+        }
+
+        return top;
     }
 
     void drawLegend(QPainter *painter)
@@ -553,7 +636,7 @@ private:
         const qreal outerRadius = size * 0.5;
         const qreal innerRadius = outerRadius * 0.42;
         const QPointF center = area.center();
-        const qreal gapDegrees = sliceGapDegrees((outerRadius + innerRadius) / 2.0);
+        const qreal gapDegrees = 0.0;
         const qreal baseStart = 90.0;
         const qreal dx = pos.x() - center.x();
         const qreal dy = pos.y() - center.y();
@@ -670,7 +753,7 @@ private:
         const qreal outerRadius = size * 0.5;
         const qreal innerRadius = outerRadius * 0.42;
         const QPointF center = area.center();
-        const qreal gapDegrees = sliceGapDegrees((outerRadius + innerRadius) / 2.0);
+        const qreal gapDegrees = 0.0;
         const qreal baseStart = 90.0;
         const qreal dx = pos.x() - center.x();
         const qreal dy = pos.y() - center.y();
@@ -697,29 +780,6 @@ private:
             current -= fullSpan;
         }
         return -1;
-    }
-
-    qreal sliceGapDegrees(qreal midRadius) const
-    {
-        if (total_ <= 0) {
-            return 0.0;
-        }
-
-        qreal minSpan = 360.0;
-        int positiveCount = 0;
-        for (const auto &slice : slices_) {
-            if (slice.value <= 0) {
-                continue;
-            }
-            ++positiveCount;
-            minSpan = qMin(minSpan, 360.0 * slice.value / total_);
-        }
-        if (positiveCount <= 0) {
-            return 0.0;
-        }
-
-        const qreal targetGapDegrees = qRadiansToDegrees(kGapPx / qMax<qreal>(1.0, midRadius));
-        return qMax<qreal>(0.0, qMin(targetGapDegrees, minSpan * 0.22));
     }
 
     QList<DonutSlice> slices_;
