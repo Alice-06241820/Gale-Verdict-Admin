@@ -63,6 +63,7 @@ const QColor kStripeBase("#d7d2cc");
 const QColor kStripeLine("#fbfaf7");
 const qreal kHoverScale = 1.06;
 const qreal kGapPx = 6.0;
+const qreal kSliceCornerPx = 9.5;
 const qreal kHoverAnimationDurationMs = 240.0;
 
 struct DonutSlice {
@@ -136,12 +137,38 @@ QPainterPath buildDonutSlicePath(const QPointF &center,
                            innerRadius * 2.0,
                            innerRadius * 2.0);
     const qreal endAngle = startAngle - span;
+    const qreal thickness = outerRadius - innerRadius;
+    const qreal cornerPx = qMin(kSliceCornerPx, thickness * 0.2);
+    const qreal maxCornerDegrees = span * 0.22;
+    const qreal outerCornerDegrees = qMin(qRadiansToDegrees(cornerPx / outerRadius), maxCornerDegrees);
+    const qreal innerCornerDegrees = qMin(qRadiansToDegrees(cornerPx / innerRadius), maxCornerDegrees);
 
-    path.moveTo(pointOnCircle(center, outerRadius, startAngle));
-    path.arcTo(outerRect, startAngle, -span);
-    path.lineTo(pointOnCircle(center, innerRadius, endAngle));
-    path.arcTo(innerRect, endAngle, span);
-    path.lineTo(pointOnCircle(center, outerRadius, startAngle));
+    if (cornerPx <= 0.5 || outerCornerDegrees <= 0.1 || innerCornerDegrees <= 0.1) {
+        path.moveTo(pointOnCircle(center, outerRadius, startAngle));
+        path.arcTo(outerRect, startAngle, -span);
+        path.lineTo(pointOnCircle(center, innerRadius, endAngle));
+        path.arcTo(innerRect, endAngle, span);
+        path.lineTo(pointOnCircle(center, outerRadius, startAngle));
+        path.closeSubpath();
+        return path;
+    }
+
+    const QPointF outerStartArc = pointOnCircle(center, outerRadius, startAngle - outerCornerDegrees);
+    const QPointF outerEndRadial = pointOnCircle(center, outerRadius - cornerPx, endAngle);
+    const QPointF innerEndRadial = pointOnCircle(center, innerRadius + cornerPx, endAngle);
+    const QPointF innerEndArc = pointOnCircle(center, innerRadius, endAngle + innerCornerDegrees);
+    const QPointF innerStartRadial = pointOnCircle(center, innerRadius + cornerPx, startAngle);
+    const QPointF outerStartRadial = pointOnCircle(center, outerRadius - cornerPx, startAngle);
+
+    path.moveTo(outerStartArc);
+    path.arcTo(outerRect, startAngle - outerCornerDegrees, -(span - outerCornerDegrees * 2.0));
+    path.quadTo(pointOnCircle(center, outerRadius, endAngle), outerEndRadial);
+    path.lineTo(innerEndRadial);
+    path.quadTo(pointOnCircle(center, innerRadius, endAngle), innerEndArc);
+    path.arcTo(innerRect, endAngle + innerCornerDegrees, span - innerCornerDegrees * 2.0);
+    path.quadTo(pointOnCircle(center, innerRadius, startAngle), innerStartRadial);
+    path.lineTo(outerStartRadial);
+    path.quadTo(pointOnCircle(center, outerRadius, startAngle), outerStartArc);
     path.closeSubpath();
     return path;
 }
@@ -309,25 +336,30 @@ private:
                         qreal innerRadius,
                         qreal baseStart)
     {
-        if (revealProgress_ < 0.98) {
+        const qreal revealAngle = 360.0 * revealProgress_;
+        if (revealAngle <= 0.0) {
             return;
         }
 
         painter->save();
         painter->setRenderHint(QPainter::Antialiasing);
-        painter->setPen(QPen(kCardBackground, kGapPx, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        painter->setPen(QPen(kCardBackground, kGapPx, Qt::SolidLine, Qt::FlatCap, Qt::RoundJoin));
         const qreal separatorOuterRadius = outerRadius * (activeIndex_ >= 0 ? hoverScale_ : 1.0);
 
         qreal current = baseStart;
+        qreal consumed = 0.0;
         for (int i = 0; i < slices_.size(); ++i) {
             if (slices_[i].value <= 0) {
                 continue;
             }
 
             const qreal fullSpan = 360.0 * slices_[i].value / total_;
-            const QPointF outer = pointOnCircle(center, separatorOuterRadius - kGapPx * 0.35, current);
-            const QPointF inner = pointOnCircle(center, innerRadius + kGapPx * 0.35, current);
-            painter->drawLine(inner, outer);
+            if (consumed <= revealAngle + 0.1) {
+                const QPointF outer = pointOnCircle(center, separatorOuterRadius - 0.5, current);
+                const QPointF inner = pointOnCircle(center, innerRadius + 0.5, current);
+                painter->drawLine(inner, outer);
+            }
+            consumed += fullSpan;
             current -= fullSpan;
         }
         painter->restore();
