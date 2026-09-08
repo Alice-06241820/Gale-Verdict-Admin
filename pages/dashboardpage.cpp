@@ -2,6 +2,7 @@
 
 #include "service/adminapiservice.h"
 
+#include <QtCharts/QAbstractSeries>
 #include <QtCharts/QChart>
 #include <QtCharts/QChartView>
 #include <QtCharts/QDateTimeAxis>
@@ -13,9 +14,9 @@
 #include <QBrush>
 #include <QColor>
 #include <QComboBox>
-#include <QCursor>
 #include <QDate>
 #include <QDateTime>
+#include <QEvent>
 #include <QFont>
 #include <QFontMetrics>
 #include <QGraphicsPathItem>
@@ -33,12 +34,12 @@
 #include <QPixmap>
 #include <QMouseEvent>
 #include <QTime>
-#include <QToolTip>
 #include <QVBoxLayout>
 #include <QEasingCurve>
 #include <QVariantAnimation>
 #include <QtMath>
 #include <cmath>
+#include <functional>
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -58,6 +59,8 @@ const QColor kMainLineColor("#4b4944");
 const QColor kAccentRed("#d84b35");
 const QColor kAccentRedDark("#a63325");
 const QColor kGuideLineColor("#c85a46");
+const QColor kPreviewGuideLineColor("#b3a89a");
+const QColor kPreviewDotColor("#f0b85a");
 const QColor kAccentYellow("#f7d84a");
 const QColor kStripeBase("#d7d2cc");
 const QColor kStripeLine("#fbfaf7");
@@ -117,6 +120,13 @@ QPointF pointOnCircle(const QPointF &center, qreal radius, qreal degrees)
                    center.y() - std::sin(radians) * radius);
 }
 
+qreal angleFromCenter(const QPointF &center, const QPointF &pos)
+{
+    const qreal dx = pos.x() - center.x();
+    const qreal dy = pos.y() - center.y();
+    return normalizeDegrees(qRadiansToDegrees(std::atan2(-dy, dx)));
+}
+
 QPainterPath buildDonutSlicePath(const QPointF &center,
                                  qreal outerRadius,
                                  qreal innerRadius,
@@ -172,6 +182,65 @@ QPainterPath buildDonutSlicePath(const QPointF &center,
     path.closeSubpath();
     return path;
 }
+
+class RevenueChartView : public QChartView
+{
+public:
+    using MouseHandler = std::function<void(const QPoint &)>;
+    using LeaveHandler = std::function<void()>;
+
+    explicit RevenueChartView(QWidget *parent = nullptr)
+        : QChartView(parent)
+    {
+        setMouseTracking(true);
+        viewport()->setMouseTracking(true);
+    }
+
+    void setMouseMoveHandler(MouseHandler handler)
+    {
+        mouseMoveHandler_ = std::move(handler);
+    }
+
+    void setMouseClickHandler(MouseHandler handler)
+    {
+        mouseClickHandler_ = std::move(handler);
+    }
+
+    void setLeaveHandler(LeaveHandler handler)
+    {
+        leaveHandler_ = std::move(handler);
+    }
+
+protected:
+    void mouseMoveEvent(QMouseEvent *event) override
+    {
+        if (mouseMoveHandler_) {
+            mouseMoveHandler_(event->pos());
+        }
+        QChartView::mouseMoveEvent(event);
+    }
+
+    void mousePressEvent(QMouseEvent *event) override
+    {
+        if (event->button() == Qt::LeftButton && mouseClickHandler_) {
+            mouseClickHandler_(event->pos());
+        }
+        QChartView::mousePressEvent(event);
+    }
+
+    void leaveEvent(QEvent *event) override
+    {
+        if (leaveHandler_) {
+            leaveHandler_();
+        }
+        QChartView::leaveEvent(event);
+    }
+
+private:
+    MouseHandler mouseMoveHandler_;
+    MouseHandler mouseClickHandler_;
+    LeaveHandler leaveHandler_;
+};
 
 class DeviceDonutChart : public QWidget
 {
@@ -678,9 +747,7 @@ private:
             return;
         }
 
-        qreal angle = qRadiansToDegrees(std::atan2(dy, dx));
-        angle += 90.0;
-        angle = normalizeDegrees(angle);
+        const qreal angle = angleFromCenter(center, pos);
 
         qreal current = baseStart + gapDegrees / 2.0;
         int nextIndex = -1;
@@ -794,9 +861,7 @@ private:
             return -1;
         }
 
-        qreal angle = qRadiansToDegrees(std::atan2(dy, dx));
-        angle += 90.0;
-        angle = normalizeDegrees(angle);
+        const qreal angle = angleFromCenter(center, pos);
 
         qreal current = baseStart + gapDegrees / 2.0;
         for (int i = 0; i < slices_.size(); ++i) {
@@ -892,12 +957,12 @@ DashboardPage::DashboardPage(AdminApiService *service, QWidget *parent)
     chartHeader->addWidget(rangeBox_);
     chartLayout->addLayout(chartHeader);
 
-    chartView_ = new QChartView(chartPanel);
+    chartView_ = new RevenueChartView(chartPanel);
     chartView_->setMinimumHeight(280);
     chartView_->setRenderHint(QPainter::Antialiasing);
     chartLayout->addWidget(chartView_);
 
-    chartHint_ = new QLabel("提示：鼠标移到折线点上可查看当天营收，点击点可固定查看数值。", chartPanel);
+    chartHint_ = new QLabel("提示：鼠标在图中移动可预览当天营收，点击可固定查看详细数值。", chartPanel);
     chartHint_->setObjectName("hintText");
     chartLayout->addWidget(chartHint_);
     analyticsRow->addWidget(chartPanel, 2);
@@ -939,6 +1004,8 @@ QLabel *DashboardPage::createMetric(const QString &title)
 
 void DashboardPage::updateChart(int days)
 {
+    const QString defaultHint = "提示：鼠标在图中移动可预览当天营收，点击可固定查看详细数值。";
+
     auto *curve = new QSplineSeries();
     curve->setName("已完成订单营收");
     curve->setPen(QPen(kMainLineColor, 2));
@@ -951,19 +1018,37 @@ void DashboardPage::updateChart(int days)
     pointsSeries->setBorderColor(kTextColor);
 
     auto *selectedVerticalLine = new QLineSeries();
-    selectedVerticalLine->setName("选中点竖向指示线");
-    QPen guidePen(kGuideLineColor, 1);
+    selectedVerticalLine->setName("固定点竖向指示线");
+    QPen guidePen(kGuideLineColor, 1.6);
     guidePen.setStyle(Qt::DashLine);
     selectedVerticalLine->setPen(guidePen);
 
     auto *selectedHorizontalLine = new QLineSeries();
-    selectedHorizontalLine->setName("选中点横向指示线");
+    selectedHorizontalLine->setName("固定点横向指示线");
     selectedHorizontalLine->setPen(guidePen);
 
+    auto *previewVerticalLine = new QLineSeries();
+    previewVerticalLine->setName("预览点竖向指示线");
+    QPen previewGuidePen(kPreviewGuideLineColor, 1.0);
+    previewGuidePen.setStyle(Qt::DashLine);
+    previewVerticalLine->setPen(previewGuidePen);
+
+    auto *previewHorizontalLine = new QLineSeries();
+    previewHorizontalLine->setName("预览点横向指示线");
+    previewHorizontalLine->setPen(previewGuidePen);
+
+    auto *previewSeries = new QScatterSeries();
+    previewSeries->setName("预览点");
+    previewSeries->setMarkerShape(QScatterSeries::MarkerShapeCircle);
+    previewSeries->setMarkerSize(10);
+    previewSeries->setColor(kPreviewDotColor);
+    previewSeries->setBorderColor(kPreviewGuideLineColor);
+    previewSeries->setPointLabelsVisible(false);
+
     auto *selectedSeries = new QScatterSeries();
-    selectedSeries->setName("选中点");
+    selectedSeries->setName("固定点");
     selectedSeries->setMarkerShape(QScatterSeries::MarkerShapeCircle);
-    selectedSeries->setMarkerSize(12);
+    selectedSeries->setMarkerSize(13);
     selectedSeries->setColor(kAccentRed);
     selectedSeries->setBorderColor(kAccentRedDark);
     selectedSeries->setPointLabelsVisible(false);
@@ -980,24 +1065,53 @@ void DashboardPage::updateChart(int days)
         pointsSeries->append(x, points[i].amount);
         maxValue = qMax(maxValue, points[i].amount);
     }
-    if (!points.isEmpty()) {
-        if (selectedRevenueIndex_ < 0 || selectedRevenueIndex_ >= points.size()) {
-            selectedRevenueIndex_ = qMin(4, points.size() - 1);
+
+    const int tickStep = 100;
+    const int axisMax = qMax(tickStep, static_cast<int>(qCeil((maxValue + 60.0) / tickStep)) * tickStep);
+
+    auto setCrosshair = [points, xValueForDate, axisMax](int index,
+                                                         QLineSeries *verticalLine,
+                                                         QLineSeries *horizontalLine,
+                                                         QScatterSeries *markerSeries) {
+        verticalLine->clear();
+        horizontalLine->clear();
+        markerSeries->clear();
+        const bool validIndex = index >= 0 && index < points.size();
+        verticalLine->setVisible(validIndex);
+        horizontalLine->setVisible(validIndex);
+        markerSeries->setVisible(validIndex);
+        if (!validIndex) {
+            return;
         }
-        const double selectedX = xValueForDate(points[selectedRevenueIndex_].date);
-        const double selectedY = points[selectedRevenueIndex_].amount;
-        selectedVerticalLine->append(selectedX, 0.0);
-        selectedVerticalLine->append(selectedX, selectedY);
-        selectedHorizontalLine->append(xValueForDate(points.first().date), selectedY);
-        selectedHorizontalLine->append(xValueForDate(points.last().date), selectedY);
-        selectedSeries->append(selectedX, selectedY);
+
+        const qreal selectedX = xValueForDate(points[index].date);
+        const qreal selectedY = points[index].amount;
+        verticalLine->append(selectedX, 0.0);
+        verticalLine->append(selectedX, axisMax);
+        horizontalLine->append(xValueForDate(points.first().date), selectedY);
+        horizontalLine->append(xValueForDate(points.last().date), selectedY);
+        markerSeries->append(selectedX, selectedY);
+    };
+
+    previewVerticalLine->setVisible(false);
+    previewHorizontalLine->setVisible(false);
+    previewSeries->setVisible(false);
+
+    if (!points.isEmpty()) {
+        if (selectedRevenueIndex_ >= points.size()) {
+            selectedRevenueIndex_ = -1;
+        }
+        setCrosshair(selectedRevenueIndex_, selectedVerticalLine, selectedHorizontalLine, selectedSeries);
     }
 
     auto *chart = new QChart();
-    chart->addSeries(selectedHorizontalLine);
-    chart->addSeries(selectedVerticalLine);
     chart->addSeries(curve);
     chart->addSeries(pointsSeries);
+    chart->addSeries(previewHorizontalLine);
+    chart->addSeries(previewVerticalLine);
+    chart->addSeries(previewSeries);
+    chart->addSeries(selectedHorizontalLine);
+    chart->addSeries(selectedVerticalLine);
     chart->addSeries(selectedSeries);
     chart->legend()->setVisible(false);
     chart->setBackgroundVisible(false);
@@ -1019,8 +1133,6 @@ void DashboardPage::updateChart(int days)
     axisX->setGridLineVisible(false);
 
     auto *axisY = new QValueAxis();
-    const int tickStep = 100;
-    const int axisMax = qMax(tickStep, static_cast<int>(qCeil((maxValue + 60.0) / tickStep)) * tickStep);
     axisY->setRange(0, axisMax);
     axisY->setTickCount(axisMax / tickStep + 1);
     axisY->setLabelFormat("%.0f");
@@ -1029,53 +1141,122 @@ void DashboardPage::updateChart(int days)
 
     chart->addAxis(axisX, Qt::AlignBottom);
     chart->addAxis(axisY, Qt::AlignLeft);
-    selectedHorizontalLine->attachAxis(axisX);
-    selectedHorizontalLine->attachAxis(axisY);
-    selectedVerticalLine->attachAxis(axisX);
-    selectedVerticalLine->attachAxis(axisY);
     curve->attachAxis(axisX);
     curve->attachAxis(axisY);
     pointsSeries->attachAxis(axisX);
     pointsSeries->attachAxis(axisY);
+    previewHorizontalLine->attachAxis(axisX);
+    previewHorizontalLine->attachAxis(axisY);
+    previewVerticalLine->attachAxis(axisX);
+    previewVerticalLine->attachAxis(axisY);
+    previewSeries->attachAxis(axisX);
+    previewSeries->attachAxis(axisY);
+    selectedHorizontalLine->attachAxis(axisX);
+    selectedHorizontalLine->attachAxis(axisY);
+    selectedVerticalLine->attachAxis(axisX);
+    selectedVerticalLine->attachAxis(axisY);
     selectedSeries->attachAxis(axisX);
     selectedSeries->attachAxis(axisY);
     chartView_->setChart(chart);
 
-    if (!points.isEmpty()) {
-        auto *badgeBox = new QGraphicsPathItem(chart);
-        badgeBox->setBrush(QBrush(kTitleColor));
-        badgeBox->setPen(QPen(kTitleColor));
-        badgeBox->setZValue(20);
+    auto updateBadge = [chart, points, xValueForDate](QGraphicsPathItem *badgeBox,
+                                                      QGraphicsSimpleTextItem *badgeText,
+                                                      QAbstractSeries *series,
+                                                      int index,
+                                                      const QString &text,
+                                                      qreal yOffset) {
+        const bool validIndex = index >= 0 && index < points.size();
+        badgeBox->setVisible(validIndex);
+        badgeText->setVisible(validIndex);
+        if (!validIndex) {
+            return;
+        }
 
-        auto *badgeText = new QGraphicsSimpleTextItem(
-            QString("%1 元").arg(points[selectedRevenueIndex_].amount, 0, 'f', 0), chart);
-        badgeText->setBrush(QBrush(QColor("#fffaf4")));
-        badgeText->setFont(QFont("Segoe UI", 10, QFont::DemiBold));
-        badgeText->setZValue(21);
+        badgeText->setText(text);
+        const QPointF pointPos = chart->mapToPosition(
+            QPointF(xValueForDate(points[index].date), points[index].amount),
+            series);
+        const QRectF textRect = badgeText->boundingRect();
+        const double width = textRect.width() + 22.0;
+        const double height = 24.0;
+        const QRectF plotArea = chart->plotArea();
+        const double boxX = qBound(plotArea.left() + 4.0,
+                                   pointPos.x() - width / 2.0,
+                                   plotArea.right() - width - 4.0);
+        double boxY = pointPos.y() - yOffset;
+        if (boxY < plotArea.top() + 4.0) {
+            boxY = pointPos.y() + 14.0;
+        }
+        const QRectF box(boxX, boxY, width, height);
+        QPainterPath path;
+        path.addRoundedRect(box, height / 2.0, height / 2.0);
+        badgeBox->setPath(path);
+        badgeText->setPos(box.x() + 11.0, box.y() + 3.0);
+    };
 
-        auto updateBadge = [=]() {
-            const QPointF pointPos = chart->mapToPosition(
-                QPointF(xValueForDate(points[selectedRevenueIndex_].date), points[selectedRevenueIndex_].amount),
-                selectedSeries);
-            const QRectF textRect = badgeText->boundingRect();
-            const double width = textRect.width() + 22.0;
-            const double height = 24.0;
-            const QRectF box(pointPos.x() - width / 2.0, pointPos.y() - 44.0, width, height);
-            QPainterPath path;
-            path.addRoundedRect(box, height / 2.0, height / 2.0);
-            badgeBox->setPath(path);
-            badgeText->setPos(box.x() + 11.0, box.y() + 3.0);
-        };
+    auto briefText = [points](int index) {
+        return QString("%1：%2 元")
+            .arg(points[index].date.toString("MM-dd"))
+            .arg(points[index].amount, 0, 'f', 0);
+    };
 
-        updateBadge();
-        connect(chart, &QChart::plotAreaChanged, this, updateBadge);
-    }
+    auto detailText = [points](int index) {
+        return QString("%1，营收 %2 元")
+            .arg(points[index].date.toString("yyyy-MM-dd"))
+            .arg(points[index].amount, 0, 'f', 2);
+    };
 
-    auto indexForPoint = [points, xValueForDate](const QPointF &point) {
+    auto *fixedBadgeBox = new QGraphicsPathItem(chart);
+    fixedBadgeBox->setBrush(QBrush(kTitleColor));
+    fixedBadgeBox->setPen(QPen(kTitleColor));
+    fixedBadgeBox->setZValue(24);
+
+    auto *fixedBadgeText = new QGraphicsSimpleTextItem(chart);
+    fixedBadgeText->setBrush(QBrush(QColor("#fffaf4")));
+    fixedBadgeText->setFont(QFont("Segoe UI", 10, QFont::DemiBold));
+    fixedBadgeText->setZValue(25);
+
+    auto *previewBadgeBox = new QGraphicsPathItem(chart);
+    previewBadgeBox->setBrush(QBrush(QColor("#fffaf4")));
+    previewBadgeBox->setPen(QPen(kPreviewGuideLineColor));
+    previewBadgeBox->setZValue(20);
+
+    auto *previewBadgeText = new QGraphicsSimpleTextItem(chart);
+    previewBadgeText->setBrush(QBrush(kTextColor));
+    previewBadgeText->setFont(QFont("Segoe UI", 9, QFont::DemiBold));
+    previewBadgeText->setZValue(21);
+
+    auto updateFixedBadge = [=]() {
+        if (selectedRevenueIndex_ < 0 || selectedRevenueIndex_ >= points.size()) {
+            updateBadge(fixedBadgeBox, fixedBadgeText, selectedSeries, -1, QString(), 44.0);
+            return;
+        }
+        updateBadge(fixedBadgeBox,
+                    fixedBadgeText,
+                    selectedSeries,
+                    selectedRevenueIndex_,
+                    briefText(selectedRevenueIndex_),
+                    44.0);
+    };
+
+    auto updatePreviewBadge = [=](int index) {
+        updateBadge(previewBadgeBox,
+                    previewBadgeText,
+                    previewSeries,
+                    index,
+                    index >= 0 && index < points.size() ? briefText(index) : QString(),
+                    36.0);
+    };
+
+    updateFixedBadge();
+    updatePreviewBadge(-1);
+    connect(chart, &QChart::plotAreaChanged, this, updateFixedBadge);
+
+    auto indexForPoint = [points, xValueForDate](qreal xValue) {
         int bestIndex = -1;
         qreal bestDistance = 1.0e30;
         for (int i = 0; i < points.size(); ++i) {
-            const qreal distance = qAbs(point.x() - xValueForDate(points[i].date));
+            const qreal distance = qAbs(xValue - xValueForDate(points[i].date));
             if (distance < bestDistance) {
                 bestDistance = distance;
                 bestIndex = i;
@@ -1084,63 +1265,62 @@ void DashboardPage::updateChart(int days)
         return bestIndex;
     };
 
-    connect(pointsSeries, &QScatterSeries::hovered, this, [this, points, indexForPoint](const QPointF &point, bool state) {
-        if (!state) {
-            chartHint_->setText("提示：鼠标移到折线点上可查看当天营收，点击点可固定查看数值。");
-            return;
+    auto indexForMousePosition = [=](const QPoint &position) {
+        if (points.isEmpty()) {
+            return -1;
         }
+        const QPointF scenePoint = chartView_->mapToScene(position);
+        const QPointF chartPoint = chart->mapFromScene(scenePoint);
+        if (!chart->plotArea().adjusted(-4.0, -4.0, 4.0, 4.0).contains(chartPoint)) {
+            return -1;
+        }
+        const QPointF value = chart->mapToValue(chartPoint, curve);
+        return indexForPoint(value.x());
+    };
 
-        const int index = indexForPoint(point);
-        if (index < 0 || index >= points.size()) {
+    auto showFixedHint = [=]() {
+        if (selectedRevenueIndex_ >= 0 && selectedRevenueIndex_ < points.size()) {
+            chartHint_->setText(QString("已固定 %1").arg(detailText(selectedRevenueIndex_)));
+        } else {
+            chartHint_->setText(defaultHint);
+        }
+    };
+
+    auto *revenueChartView = dynamic_cast<RevenueChartView *>(chartView_);
+    if (!revenueChartView) {
+        chartHint_->setText(defaultHint);
+        return;
+    }
+
+    revenueChartView->setMouseMoveHandler([=](const QPoint &position) {
+        const int index = indexForMousePosition(position);
+        setCrosshair(index, previewVerticalLine, previewHorizontalLine, previewSeries);
+        updatePreviewBadge(index);
+        if (index < 0) {
+            showFixedHint();
             return;
         }
-        const QString text = QString("%1：%2 元")
-                                 .arg(points[index].date.toString("yyyy-MM-dd"))
-                                 .arg(points[index].amount, 0, 'f', 2);
-        chartHint_->setText(text);
-        QToolTip::showText(QCursor::pos(), text, chartView_);
+        chartHint_->setText(QString("预览 %1，点击可固定。").arg(briefText(index)));
     });
 
-    connect(pointsSeries, &QScatterSeries::clicked, this, [this, points, indexForPoint](const QPointF &point) {
-        const int index = indexForPoint(point);
-        if (index < 0 || index >= points.size()) {
+    revenueChartView->setMouseClickHandler([=](const QPoint &position) {
+        const int index = indexForMousePosition(position);
+        if (index < 0) {
             return;
         }
         selectedRevenueIndex_ = index;
-        updateChart(rangeBox_->currentData().toInt());
-        chartHint_->setText(QString("已选中 %1，营收 %2 元")
-                                .arg(points[index].date.toString("yyyy-MM-dd"))
-                                .arg(points[index].amount, 0, 'f', 2));
+        setCrosshair(selectedRevenueIndex_, selectedVerticalLine, selectedHorizontalLine, selectedSeries);
+        updateFixedBadge();
+        chartHint_->setText(QString("已固定 %1").arg(detailText(selectedRevenueIndex_)));
     });
 
-    connect(selectedSeries, &QScatterSeries::hovered, this, [this, points, indexForPoint](const QPointF &point, bool state) {
-        if (!state) {
-            chartHint_->setText("提示：鼠标移到折线点上可查看当天营收，点击点可固定查看数值。");
-            return;
-        }
-
-        const int index = indexForPoint(point);
-        if (index < 0 || index >= points.size()) {
-            return;
-        }
-        const QString text = QString("选中点 %1：%2 元")
-                                 .arg(points[index].date.toString("yyyy-MM-dd"))
-                                 .arg(points[index].amount, 0, 'f', 2);
-        chartHint_->setText(text);
-        QToolTip::showText(QCursor::pos(), text, chartView_);
+    revenueChartView->setLeaveHandler([=]() {
+        setCrosshair(-1, previewVerticalLine, previewHorizontalLine, previewSeries);
+        updatePreviewBadge(-1);
+        showFixedHint();
     });
 
-    connect(selectedSeries, &QScatterSeries::clicked, this, [this, points, indexForPoint](const QPointF &point) {
-        const int index = indexForPoint(point);
-        if (index < 0 || index >= points.size()) {
-            return;
-        }
-        selectedRevenueIndex_ = index;
-        updateChart(rangeBox_->currentData().toInt());
-        chartHint_->setText(QString("已选中 %1，营收 %2 元")
-                                .arg(points[index].date.toString("yyyy-MM-dd"))
-                                .arg(points[index].amount, 0, 'f', 2));
-    });
+    showFixedHint();
 }
 
 void DashboardPage::updateDeviceSummary()
