@@ -289,7 +289,7 @@ QTableWidget::item {
 QTableWidget::item:selected {
     background: #f4d952;
     color: #1f1d1a;
-}
+}//..
 
 QHeaderView {
     background: transparent;

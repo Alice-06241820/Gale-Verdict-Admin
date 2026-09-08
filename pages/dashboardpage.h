@@ -37,7 +37,7 @@ private:
     QLabel *totalRevenue_ = nullptr;
     QComboBox *rangeBox_ = nullptr;
     DashboardChartView *chartView_ = nullptr;
-    DashboardChartView *deviceChartView_ = nullptr;
+    QWidget *deviceChartView_ = nullptr;
     QLabel *chartHint_ = nullptr;
     int selectedRevenueIndex_ = -1;
 };

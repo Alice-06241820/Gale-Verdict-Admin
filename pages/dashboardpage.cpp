@@ -7,8 +7,6 @@
 #include <QtCharts/QDateTimeAxis>
 #include <QtCharts/QLegend>
 #include <QtCharts/QLineSeries>
-#include <QtCharts/QPieSeries>
-#include <QtCharts/QPieSlice>
 #include <QtCharts/QScatterSeries>
 #include <QtCharts/QSplineSeries>
 #include <QtCharts/QValueAxis>
@@ -19,6 +17,7 @@
 #include <QDate>
 #include <QDateTime>
 #include <QFont>
+#include <QFontMetrics>
 #include <QGraphicsPathItem>
 #include <QGraphicsSimpleTextItem>
 #include <QGridLayout>
@@ -27,13 +26,27 @@
 #include <QMargins>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPaintEvent>
+#include <QPalette>
 #include <QPen>
 #include <QPointF>
 #include <QPixmap>
+#include <QMouseEvent>
 #include <QTime>
 #include <QToolTip>
 #include <QVBoxLayout>
+#include <QEasingCurve>
+#include <QVariantAnimation>
 #include <QtMath>
+#include <cmath>
+
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
+
+#ifdef QT_CHARTS_NAMESPACE
+using namespace QT_CHARTS_NAMESPACE;
+#endif
 
 namespace {
 const QColor kTextColor("#1f1d1a");
@@ -48,11 +61,678 @@ const QColor kGuideLineColor("#c85a46");
 const QColor kAccentYellow("#f7d84a");
 const QColor kStripeBase("#d7d2cc");
 const QColor kStripeLine("#fbfaf7");
+const qreal kHoverScale = 1.06;
+const qreal kGapPx = 5.0;
+const qreal kHoverAnimationDurationMs = 240.0;
+
+struct DonutSlice {
+    QString label;
+    int value = 0;
+    QBrush brush;
+};
+
+qreal normalizeDegrees(qreal angle)
+{
+    angle = std::fmod(angle, 360.0);
+    if (angle < 0.0) {
+        angle += 360.0;
+    }
+    return angle;
 }
 
-#ifdef QT_CHARTS_NAMESPACE
-using namespace QT_CHARTS_NAMESPACE;
+qreal textWidth(const QFontMetrics &metrics, const QString &text)
+{
+#if QT_VERSION >= QT_VERSION_CHECK(5, 11, 0)
+    return metrics.horizontalAdvance(text);
+#else
+    return metrics.width(text);
 #endif
+}
+
+bool prefersReducedMotion()
+{
+#ifdef Q_OS_WIN
+    BOOL clientAreaAnimations = TRUE;
+    if (SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &clientAreaAnimations, 0) && !clientAreaAnimations) {
+        return true;
+    }
+
+    ANIMATIONINFO animationInfo;
+    animationInfo.cbSize = sizeof(animationInfo);
+    animationInfo.iMinAnimate = TRUE;
+    if (SystemParametersInfoW(SPI_GETANIMATION, sizeof(animationInfo), &animationInfo, 0) && !animationInfo.iMinAnimate) {
+        return true;
+    }
+#endif
+
+    return qEnvironmentVariableIntValue("QT_REDUCED_MOTION") > 0
+        || qEnvironmentVariableIntValue("QT_DISABLE_ANIMATIONS") > 0;
+}
+
+QPointF pointOnCircle(const QPointF &center, qreal radius, qreal degrees)
+{
+    const qreal radians = qDegreesToRadians(degrees);
+    return QPointF(center.x() + std::cos(radians) * radius,
+                   center.y() - std::sin(radians) * radius);
+}
+
+QPainterPath buildDonutSliceArcPath(const QPointF &center,
+                                    qreal radius,
+                                    qreal startAngle,
+                                    qreal span)
+{
+    QPainterPath path;
+    if (span <= 0.0 || radius <= 0.0) {
+        return path;
+    }
+
+    const QRectF arcRect(center.x() - radius, center.y() - radius, radius * 2.0, radius * 2.0);
+    path.moveTo(pointOnCircle(center, radius, startAngle));
+    path.arcTo(arcRect, startAngle, -span);
+    return path;
+}
+
+class DeviceDonutChart : public QWidget
+{
+public:
+    explicit DeviceDonutChart(QWidget *parent = nullptr)
+        : QWidget(parent)
+    {
+        setMouseTracking(true);
+        setAttribute(Qt::WA_Hover, true);
+    }
+
+    ~DeviceDonutChart() override
+    {
+        stopAnimation(&hoverAnimation_);
+        stopAnimation(&revealAnimation_);
+    }
+
+    void setSlices(const QList<DonutSlice> &slices)
+    {
+        stopAnimation(&hoverAnimation_);
+        stopAnimation(&revealAnimation_);
+        slices_ = slices;
+        total_ = 0;
+        for (const auto &slice : slices_) {
+            total_ += slice.value;
+        }
+        if (pinnedIndex_ >= slices_.size()) {
+            pinnedIndex_ = -1;
+        }
+        hoveredIndex_ = -1;
+        activeIndex_ = -1;
+        hoverScale_ = 1.0;
+        revealProgress_ = prefersReducedMotion() ? 1.0 : 0.0;
+        syncActiveIndex(false);
+        startRevealAnimation();
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.fillRect(rect(), Qt::transparent);
+
+        const QRectF area = rect().adjusted(22, 10, -22, -50);
+        const qreal size = qMin(area.width(), area.height());
+        if (size <= 0.0 || total_ <= 0) {
+            return;
+        }
+
+        const qreal outerRadius = size * 0.5;
+        const qreal innerRadius = outerRadius * 0.42;
+        const QPointF center = area.center();
+        const qreal baseStart = 90.0;
+        const qreal gapDegrees = sliceGapDegrees((outerRadius + innerRadius) / 2.0);
+
+        QFont titleFont = font();
+        titleFont.setPointSize(qMax(9, titleFont.pointSize()));
+        titleFont.setBold(true);
+
+        QFont detailFont = font();
+        detailFont.setPointSize(qMax(8, detailFont.pointSize() - 2));
+        detailFont.setBold(false);
+
+        drawSlices(&painter, center, outerRadius, innerRadius, baseStart, gapDegrees, false);
+        drawSlices(&painter, center, outerRadius, innerRadius, baseStart, gapDegrees, true);
+
+        drawDetailCard(&painter, center, outerRadius, baseStart, gapDegrees, titleFont, detailFont);
+        drawLegend(&painter);
+    }
+
+    void mouseMoveEvent(QMouseEvent *event) override
+    {
+        updateHoveredIndex(event->pos());
+    }
+
+    void mousePressEvent(QMouseEvent *event) override
+    {
+        if (event->button() != Qt::LeftButton) {
+            QWidget::mousePressEvent(event);
+            return;
+        }
+
+        const int index = indexAt(event->pos());
+        if (index < 0) {
+            if (pinnedIndex_ >= 0) {
+                pinnedIndex_ = -1;
+                syncActiveIndex(true);
+            }
+            update();
+            return;
+        }
+
+        pinnedIndex_ = (pinnedIndex_ == index) ? -1 : index;
+        syncActiveIndex(true);
+        update();
+    }
+
+    void leaveEvent(QEvent *) override
+    {
+        setHoveredIndex(-1);
+    }
+
+private:
+    void stopAnimation(QVariantAnimation **animation)
+    {
+        if (!animation || !*animation) {
+            return;
+        }
+        (*animation)->stop();
+        (*animation)->deleteLater();
+        *animation = nullptr;
+    }
+
+    void drawSlices(QPainter *painter,
+                    const QPointF &center,
+                    qreal outerRadius,
+                    qreal innerRadius,
+                    qreal baseStart,
+                    qreal gapDegrees,
+                    bool drawHovered)
+    {
+        qreal current = baseStart + gapDegrees / 2.0;
+        qreal consumed = 0.0;
+        const qreal revealAngle = 360.0 * revealProgress_;
+        for (int i = 0; i < slices_.size(); ++i) {
+            const DonutSlice &slice = slices_[i];
+            if (slice.value <= 0) {
+                continue;
+            }
+
+            const qreal fullSpan = 360.0 * slice.value / total_;
+            const qreal drawSpan = qMax<qreal>(0.0, fullSpan - gapDegrees);
+            const qreal revealed = qBound<qreal>(0.0, revealAngle - consumed, drawSpan);
+            if (revealed <= 0.0 || drawSpan <= 0.0 || (i == activeIndex_) != drawHovered) {
+                consumed += fullSpan;
+                current -= fullSpan;
+                continue;
+            }
+
+            const bool hovered = (i == activeIndex_);
+            const qreal scale = hovered ? hoverScale_ : 1.0;
+            const qreal pieceOuter = outerRadius * scale;
+            const qreal pieceInner = innerRadius * scale;
+            const qreal pieceThickness = qMax<qreal>(1.0, pieceOuter - pieceInner);
+            const qreal pieceRadius = (pieceOuter + pieceInner) / 2.0;
+            const QPainterPath path = buildDonutSliceArcPath(center, pieceRadius, current, revealed);
+
+            painter->save();
+            painter->setOpacity(activeIndex_ >= 0 && i != activeIndex_ ? 0.58 : 1.0);
+            painter->setBrush(Qt::NoBrush);
+            painter->setPen(QPen(slice.brush, pieceThickness, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+            painter->drawPath(path);
+            painter->restore();
+            consumed += fullSpan;
+            current -= fullSpan;
+        }
+    }
+
+    void startRevealAnimation()
+    {
+        if (revealAnimation_) {
+            revealAnimation_->stop();
+            revealAnimation_->deleteLater();
+            revealAnimation_ = nullptr;
+        }
+        if (total_ <= 0) {
+            update();
+            return;
+        }
+
+        if (prefersReducedMotion()) {
+            revealProgress_ = 1.0;
+            update();
+            return;
+        }
+
+        revealAnimation_ = new QVariantAnimation(this);
+        revealAnimation_->setDuration(1050);
+        revealAnimation_->setStartValue(0.0);
+        revealAnimation_->setEndValue(1.0);
+        revealAnimation_->setEasingCurve(QEasingCurve::OutCubic);
+        connect(revealAnimation_, &QVariantAnimation::valueChanged, this, [this](const QVariant &value) {
+            revealProgress_ = value.toReal();
+            update();
+        });
+        connect(revealAnimation_, &QVariantAnimation::finished, this, [this]() {
+            if (revealAnimation_) {
+                revealAnimation_->deleteLater();
+                revealAnimation_ = nullptr;
+            }
+        });
+        revealAnimation_->start();
+    }
+
+    void drawDetailCard(QPainter *painter,
+                        const QPointF &center,
+                        qreal outerRadius,
+                        qreal baseStart,
+                        qreal gapDegrees,
+                        const QFont &titleFont,
+                        const QFont &detailFont)
+    {
+        const int index = activeDetailIndex();
+        const bool hasSlice = index >= 0 && index < slices_.size() && slices_[index].value > 0;
+        if (!hasSlice) {
+            return;
+        }
+
+        const QColor textColor("#fffaf4");
+        const QColor mutedTextColor("#ded7ce");
+        const QColor cardColor("#171511");
+        const QColor borderColor("#171511");
+
+        const QString title = slices_[index].label;
+        const QString detailLine = QStringLiteral("%1 台 · %2%")
+                                       .arg(slices_[index].value)
+                                       .arg(100.0 * slices_[index].value / total_, 0, 'f', 1);
+        const QFontMetrics titleMetrics(titleFont);
+        const QFontMetrics detailMetrics(detailFont);
+        const qreal maxCardWidth = qMin<qreal>(qMax<qreal>(74.0, width() - 28.0), 92.0);
+        const qreal textMaxWidth = maxCardWidth - 16.0;
+        const QRect titleBounds = titleMetrics.boundingRect(QRect(0, 0, static_cast<int>(textMaxWidth), 400), Qt::TextWordWrap, title);
+        const qreal detailWidth = textWidth(detailMetrics, detailLine);
+        qreal cardWidth = qMax<qreal>(74.0, qMax<qreal>(titleBounds.width(), detailWidth) + 16.0);
+        cardWidth = qMin(cardWidth, maxCardWidth);
+
+        const QRect finalTitleBounds = titleMetrics.boundingRect(QRect(0, 0, static_cast<int>(cardWidth - 16.0), 400), Qt::TextWordWrap, title);
+        const qreal lineHeight = detailMetrics.height();
+        const qreal cardHeight = 13.0 + finalTitleBounds.height() + lineHeight;
+
+        const qreal midAngle = sliceMidAngle(index, baseStart, gapDegrees);
+        const QPointF anchor = pointOnCircle(center, outerRadius + 3.5, midAngle);
+        const QRectF bounds = rect().adjusted(10, 8, -10, -24);
+        QRectF box = bestDetailCardRect(center, outerRadius, anchor, cardWidth, cardHeight, bounds);
+
+        painter->save();
+        painter->setRenderHint(QPainter::Antialiasing);
+        painter->setPen(QPen(borderColor, 1.0));
+        painter->setBrush(cardColor);
+        painter->drawRoundedRect(box, 7, 7);
+
+        painter->setPen(textColor);
+        painter->setFont(titleFont);
+        const qreal padX = 7.0;
+        qreal y = box.top() + 7.0;
+
+        painter->setBrush(slices_[index].brush);
+        painter->setPen(QPen(QColor("#fffaf4"), 1.0));
+        painter->drawEllipse(QRectF(box.left() + padX, y + 5.0, 6.0, 6.0));
+        painter->setPen(textColor);
+        painter->drawText(QRectF(box.left() + padX + 10.0, y, box.width() - padX * 2.0 - 10.0, finalTitleBounds.height()),
+                          Qt::AlignLeft | Qt::AlignTop | Qt::TextWordWrap,
+                          title);
+        y += finalTitleBounds.height() + 2.0;
+
+        painter->setFont(detailFont);
+        painter->setPen(mutedTextColor);
+        painter->drawText(QRectF(box.left() + padX, y, box.width() - padX * 2.0, lineHeight),
+                          Qt::AlignLeft | Qt::AlignVCenter,
+                          detailLine);
+        painter->restore();
+    }
+
+    QRectF bestDetailCardRect(const QPointF &center,
+                              qreal outerRadius,
+                              const QPointF &anchor,
+                              qreal cardWidth,
+                              qreal cardHeight,
+                              const QRectF &bounds) const
+    {
+        auto clamped = [bounds](QRectF rect) {
+            if (rect.left() < bounds.left()) {
+                rect.moveLeft(bounds.left());
+            }
+            if (rect.right() > bounds.right()) {
+                rect.moveRight(bounds.right());
+            }
+            if (rect.top() < bounds.top()) {
+                rect.moveTop(bounds.top());
+            }
+            if (rect.bottom() > bounds.bottom()) {
+                rect.moveBottom(bounds.bottom());
+            }
+            return rect;
+        };
+
+        auto overlapsRing = [center, outerRadius](const QRectF &rect) {
+            const qreal nearestX = qBound(rect.left(), center.x(), rect.right());
+            const qreal nearestY = qBound(rect.top(), center.y(), rect.bottom());
+            const qreal dx = nearestX - center.x();
+            const qreal dy = nearestY - center.y();
+            return std::hypot(dx, dy) < outerRadius + 2.0;
+        };
+
+        auto score = [anchor](const QRectF &rect) {
+            const qreal dx = rect.center().x() - anchor.x();
+            const qreal dy = rect.center().y() - anchor.y();
+            return dx * dx + dy * dy;
+        };
+
+        QList<QRectF> candidates;
+        candidates.append(QRectF(anchor.x() + 3.5, anchor.y() - cardHeight / 2.0, cardWidth, cardHeight));
+        candidates.append(QRectF(anchor.x() - cardWidth - 3.5, anchor.y() - cardHeight / 2.0, cardWidth, cardHeight));
+        candidates.append(QRectF(anchor.x() - cardWidth / 2.0, anchor.y() - cardHeight - 3.5, cardWidth, cardHeight));
+        candidates.append(QRectF(anchor.x() - cardWidth / 2.0, anchor.y() + 3.5, cardWidth, cardHeight));
+        candidates.append(QRectF(bounds.left(), bounds.top(), cardWidth, cardHeight));
+        candidates.append(QRectF(bounds.right() - cardWidth, bounds.top(), cardWidth, cardHeight));
+        candidates.append(QRectF(bounds.left(), bounds.bottom() - cardHeight, cardWidth, cardHeight));
+        candidates.append(QRectF(bounds.right() - cardWidth, bounds.bottom() - cardHeight, cardWidth, cardHeight));
+
+        QRectF best = clamped(candidates.first());
+        qreal bestScore = 1.0e30;
+        for (const QRectF &candidate : candidates) {
+            const QRectF rect = clamped(candidate);
+            if (overlapsRing(rect)) {
+                continue;
+            }
+            const qreal candidateScore = score(rect);
+            if (candidateScore < bestScore) {
+                best = rect;
+                bestScore = candidateScore;
+            }
+        }
+
+        if (bestScore < 1.0e29) {
+            return best;
+        }
+
+        qreal leastOverlapScore = -1.0e30;
+        for (const QRectF &candidate : candidates) {
+            const QRectF rect = clamped(candidate);
+            const qreal dx = rect.center().x() - center.x();
+            const qreal dy = rect.center().y() - center.y();
+            const qreal candidateScore = std::hypot(dx, dy) - score(rect) * 0.0001;
+            if (candidateScore > leastOverlapScore) {
+                best = rect;
+                leastOverlapScore = candidateScore;
+            }
+        }
+        return best;
+    }
+
+    qreal sliceMidAngle(int index, qreal baseStart, qreal gapDegrees) const
+    {
+        qreal current = baseStart + gapDegrees / 2.0;
+        for (int i = 0; i < slices_.size(); ++i) {
+            if (slices_[i].value <= 0) {
+                continue;
+            }
+
+            const qreal fullSpan = 360.0 * slices_[i].value / total_;
+            const qreal drawSpan = qMax<qreal>(0.0, fullSpan - gapDegrees);
+            if (i == index) {
+                return current - drawSpan / 2.0;
+            }
+            current -= fullSpan;
+        }
+        return baseStart;
+    }
+
+    void drawLegend(QPainter *painter)
+    {
+        QFont legendFont = font();
+        legendFont.setPointSize(qMax(9, legendFont.pointSize() - 1));
+        painter->setFont(legendFont);
+        const QFontMetrics fm(legendFont);
+
+        const qreal maxWidth = width() - 44.0;
+        qreal x = 22.0;
+        qreal y = height() - 16.0;
+        bool firstInRow = true;
+        for (const auto &slice : slices_) {
+            if (slice.value <= 0) {
+                continue;
+            }
+            const qreal textMaxWidth = 132.0;
+            const QRect labelBounds = fm.boundingRect(QRect(0, 0, static_cast<int>(textMaxWidth), 120),
+                                                      Qt::TextWordWrap,
+                                                      slice.label);
+            const qreal itemWidth = 10.0 + 6.0 + labelBounds.width() + 18.0;
+            if (!firstInRow && x + itemWidth > maxWidth + 22.0) {
+                x = 22.0;
+                y -= qMax<qreal>(18.0, labelBounds.height() + 2.0);
+                firstInRow = true;
+            }
+
+            painter->setPen(QPen(kTextColor, 1));
+            painter->setBrush(slice.brush);
+            painter->drawEllipse(QRectF(x, y - 7.0, 9.0, 9.0));
+            x += 14.0;
+
+            painter->setPen(kTextColor);
+            painter->drawText(QRectF(x, y - 11.0, textMaxWidth, qMax<qreal>(18.0, labelBounds.height() + 2.0)),
+                              Qt::AlignLeft | Qt::AlignVCenter | Qt::TextWordWrap,
+                              slice.label);
+            x += labelBounds.width() + 18.0;
+            firstInRow = false;
+        }
+    }
+
+    void setHoveredIndex(int nextIndex)
+    {
+        if (nextIndex == hoveredIndex_) {
+            return;
+        }
+
+        hoveredIndex_ = nextIndex;
+        syncActiveIndex(true);
+    }
+
+    void updateHoveredIndex(const QPointF &pos)
+    {
+        const QRectF area = rect().adjusted(22, 10, -22, -50);
+        const qreal size = qMin(area.width(), area.height());
+        if (size <= 0.0 || total_ <= 0) {
+            return;
+        }
+
+        const qreal outerRadius = size * 0.5;
+        const qreal innerRadius = outerRadius * 0.42;
+        const QPointF center = area.center();
+        const qreal gapDegrees = sliceGapDegrees((outerRadius + innerRadius) / 2.0);
+        const qreal baseStart = 90.0;
+        const qreal dx = pos.x() - center.x();
+        const qreal dy = pos.y() - center.y();
+        const qreal dist = std::hypot(dx, dy);
+        if (dist < innerRadius || dist > outerRadius * 1.1) {
+            setHoveredIndex(-1);
+            return;
+        }
+
+        qreal angle = qRadiansToDegrees(std::atan2(dy, dx));
+        angle += 90.0;
+        angle = normalizeDegrees(angle);
+
+        qreal current = baseStart + gapDegrees / 2.0;
+        int nextIndex = -1;
+        for (int i = 0; i < slices_.size(); ++i) {
+            if (slices_[i].value <= 0) {
+                continue;
+            }
+            const qreal fullSpan = 360.0 * slices_[i].value / total_;
+            const qreal drawSpan = qMax<qreal>(0.0, fullSpan - gapDegrees);
+            const qreal rel = normalizeDegrees(current - angle);
+            if (rel >= 0.0 && rel < drawSpan) {
+                nextIndex = i;
+                break;
+            }
+            current -= fullSpan;
+        }
+
+        setHoveredIndex(nextIndex);
+    }
+
+    void syncActiveIndex(bool animate)
+    {
+        const int nextActiveIndex = hoveredIndex_ >= 0 ? hoveredIndex_ : pinnedIndex_;
+        if (nextActiveIndex == activeIndex_ && hoveredIndex_ >= 0) {
+            if (animate && !prefersReducedMotion()) {
+                const qreal targetScale = nextActiveIndex >= 0 ? kHoverScale : 1.0;
+                if (qAbs(hoverScale_ - targetScale) > 0.001) {
+                    stopAnimation(&hoverAnimation_);
+                    hoverAnimation_ = new QVariantAnimation(this);
+                    hoverAnimation_->setDuration(static_cast<int>(kHoverAnimationDurationMs));
+                    hoverAnimation_->setStartValue(hoverScale_);
+                    hoverAnimation_->setEndValue(targetScale);
+                    hoverAnimation_->setEasingCurve(QEasingCurve::OutCubic);
+                    connect(hoverAnimation_, &QVariantAnimation::valueChanged, this, [this](const QVariant &value) {
+                        hoverScale_ = value.toReal();
+                        update();
+                    });
+                    connect(hoverAnimation_, &QVariantAnimation::finished, this, [this]() {
+                        if (hoverAnimation_) {
+                            hoverAnimation_->deleteLater();
+                            hoverAnimation_ = nullptr;
+                        }
+                    });
+                    hoverAnimation_->start();
+                    return;
+                }
+            }
+        }
+
+        if (activeIndex_ != nextActiveIndex) {
+            activeIndex_ = nextActiveIndex;
+            if (hoveredIndex_ < 0 && activeIndex_ < 0) {
+                hoverScale_ = 1.0;
+            }
+        }
+
+        stopAnimation(&hoverAnimation_);
+        if (prefersReducedMotion() || !animate) {
+            hoverScale_ = activeIndex_ >= 0 ? kHoverScale : 1.0;
+            update();
+            return;
+        }
+
+        const qreal targetScale = activeIndex_ >= 0 ? kHoverScale : 1.0;
+        hoverAnimation_ = new QVariantAnimation(this);
+        hoverAnimation_->setDuration(static_cast<int>(kHoverAnimationDurationMs));
+        hoverAnimation_->setStartValue(hoverScale_);
+        hoverAnimation_->setEndValue(targetScale);
+        hoverAnimation_->setEasingCurve(QEasingCurve::OutCubic);
+        connect(hoverAnimation_, &QVariantAnimation::valueChanged, this, [this](const QVariant &value) {
+            hoverScale_ = value.toReal();
+            update();
+        });
+        connect(hoverAnimation_, &QVariantAnimation::finished, this, [this]() {
+            if (hoverAnimation_) {
+                hoverAnimation_->deleteLater();
+                hoverAnimation_ = nullptr;
+            }
+        });
+        hoverAnimation_->start();
+    }
+
+    int activeDetailIndex() const
+    {
+        if (hoveredIndex_ >= 0 && hoveredIndex_ < slices_.size()) {
+            return hoveredIndex_;
+        }
+        if (pinnedIndex_ >= 0 && pinnedIndex_ < slices_.size()) {
+            return pinnedIndex_;
+        }
+        return -1;
+    }
+
+    int indexAt(const QPointF &pos) const
+    {
+        const QRectF area = rect().adjusted(22, 10, -22, -50);
+        const qreal size = qMin(area.width(), area.height());
+        if (size <= 0.0 || total_ <= 0) {
+            return -1;
+        }
+
+        const qreal outerRadius = size * 0.5;
+        const qreal innerRadius = outerRadius * 0.42;
+        const QPointF center = area.center();
+        const qreal gapDegrees = sliceGapDegrees((outerRadius + innerRadius) / 2.0);
+        const qreal baseStart = 90.0;
+        const qreal dx = pos.x() - center.x();
+        const qreal dy = pos.y() - center.y();
+        const qreal dist = std::hypot(dx, dy);
+        if (dist < innerRadius || dist > outerRadius * 1.12) {
+            return -1;
+        }
+
+        qreal angle = qRadiansToDegrees(std::atan2(dy, dx));
+        angle += 90.0;
+        angle = normalizeDegrees(angle);
+
+        qreal current = baseStart + gapDegrees / 2.0;
+        for (int i = 0; i < slices_.size(); ++i) {
+            if (slices_[i].value <= 0) {
+                continue;
+            }
+            const qreal fullSpan = 360.0 * slices_[i].value / total_;
+            const qreal drawSpan = qMax<qreal>(0.0, fullSpan - gapDegrees);
+            const qreal rel = normalizeDegrees(current - angle);
+            if (rel >= 0.0 && rel < drawSpan) {
+                return i;
+            }
+            current -= fullSpan;
+        }
+        return -1;
+    }
+
+    qreal sliceGapDegrees(qreal midRadius) const
+    {
+        if (total_ <= 0) {
+            return 0.0;
+        }
+
+        qreal minSpan = 360.0;
+        int positiveCount = 0;
+        for (const auto &slice : slices_) {
+            if (slice.value <= 0) {
+                continue;
+            }
+            ++positiveCount;
+            minSpan = qMin(minSpan, 360.0 * slice.value / total_);
+        }
+        if (positiveCount <= 0) {
+            return 0.0;
+        }
+
+        const qreal targetGapDegrees = qRadiansToDegrees(kGapPx / qMax<qreal>(1.0, midRadius));
+        return qMax<qreal>(0.0, qMin(targetGapDegrees, minSpan * 0.22));
+    }
+
+    QList<DonutSlice> slices_;
+    int total_ = 0;
+    int hoveredIndex_ = -1;
+    int activeIndex_ = -1;
+    int pinnedIndex_ = -1;
+    qreal hoverScale_ = 1.0;
+    qreal revealProgress_ = 1.0;
+    QVariantAnimation *hoverAnimation_ = nullptr;
+    QVariantAnimation *revealAnimation_ = nullptr;
+};
+}
 
 DashboardPage::DashboardPage(AdminApiService *service, QWidget *parent)
     : QWidget(parent)
@@ -92,10 +772,13 @@ DashboardPage::DashboardPage(AdminApiService *service, QWidget *parent)
 
     auto *deviceTitle = new QLabel("电桩状态分布", devicePanel);
     deviceTitle->setObjectName("sectionTitle");
-    deviceChartView_ = new QChartView(devicePanel);
+    auto *deviceHint = new QLabel("提示：悬停或点击扇区查看完整故障详情。", devicePanel);
+    deviceHint->setObjectName("hintText");
+    deviceHint->setWordWrap(true);
+    deviceChartView_ = new DeviceDonutChart(devicePanel);
     deviceChartView_->setMinimumHeight(330);
-    deviceChartView_->setRenderHint(QPainter::Antialiasing);
     deviceLayout->addWidget(deviceTitle);
+    deviceLayout->addWidget(deviceHint);
     deviceLayout->addWidget(deviceChartView_, 1);
     analyticsRow->addWidget(devicePanel, 1);
 
@@ -371,12 +1054,6 @@ void DashboardPage::updateChart(int days)
 void DashboardPage::updateDeviceSummary()
 {
     const DeviceStatusSummary summary = service_->deviceStatusSummary();
-    auto *series = new QPieSeries();
-    series->setHoleSize(0.42);
-    series->setPieSize(0.92);
-    series->setPieStartAngle(90);
-    series->setPieEndAngle(450);
-
     QPixmap stripePixmap(12, 12);
     stripePixmap.fill(kStripeBase);
     {
@@ -387,32 +1064,14 @@ void DashboardPage::updateDeviceSummary()
         stripePainter.drawLine(4, 14, 14, 4);
     }
 
-    auto addSlice = [series](const QString &name, int count, const QBrush &brush) {
-        if (count <= 0) {
-            return;
-        }
-        auto *slice = series->append(name, count);
-        slice->setLabel(name);
-        slice->setLabelVisible(false);
-        slice->setLabelColor(kTextColor);
-        slice->setBrush(brush);
-        slice->setBorderColor(kCardBackground);
-        slice->setBorderWidth(2);
-    };
+    QList<DonutSlice> slices;
+    slices.append({"空闲", summary.idleCount, QBrush(kAccentYellow)});
+    slices.append({"在用", summary.usingCount, QBrush(QColor("#d7d2cc"))});
+    slices.append({"故障", summary.faultCount, QBrush(stripePixmap)});
 
-    addSlice("空闲", summary.idleCount, QBrush(kAccentYellow));
-    addSlice("在用", summary.usingCount, QBrush(QColor("#d7d2cc")));
-    addSlice("故障", summary.faultCount, QBrush(stripePixmap));
-
-    auto *chart = new QChart();
-    chart->addSeries(series);
-    chart->setBackgroundVisible(false);
-    chart->setTitle("");
-    chart->setMargins(QMargins(0, 0, 0, 0));
-    chart->legend()->setVisible(true);
-    chart->legend()->setAlignment(Qt::AlignBottom);
-    chart->legend()->setLabelColor(kTextColor);
-    chart->legend()->setMarkerShape(QLegend::MarkerShapeCircle);
-    chart->setAnimationOptions(QChart::NoAnimation);
-    deviceChartView_->setChart(chart);
+    if (!deviceChartView_) {
+        return;
+    }
+    auto *chart = static_cast<DeviceDonutChart *>(deviceChartView_);
+    chart->setSlices(slices);
 }
