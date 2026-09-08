@@ -1,6 +1,27 @@
 #include "service/adminapiservice.h"
 
 #include <QDate>
+#include <QEventLoop>
+#include <QJsonArray>
+#include <QNetworkReply>
+#include <QNetworkRequest>
+#include <QTimer>
+#include <QUrl>
+
+namespace {
+
+QString jsonErrorMessage(const QJsonDocument &doc, const QString &fallback)
+{
+    if (doc.isObject()) {
+        const QString message = doc.object().value("message").toString();
+        if (!message.isEmpty()) {
+            return message;
+        }
+    }
+    return fallback;
+}
+
+} // namespace
 
 AdminApiService::AdminApiService(QObject *parent)
     : QObject(parent)
@@ -10,7 +31,6 @@ AdminApiService::AdminApiService(QObject *parent)
 
 bool AdminApiService::login(const QString &account, const QString &password, QString *errorMessage)
 {
-    // TODO(后端)：替换为 POST /api/admin/login，成功后保存管理员 token。
     if (account.trimmed().isEmpty() || password.isEmpty()) {
         if (errorMessage) {
             *errorMessage = "账号和密码不能为空";
@@ -18,14 +38,36 @@ bool AdminApiService::login(const QString &account, const QString &password, QSt
         return false;
     }
 
-    if (account == "admin" && password == "123456") {
-        return true;
+    QJsonObject body;
+    body["username"] = account.trimmed();
+    body["password"] = password;
+
+    bool ok = false;
+    const QJsonDocument doc = postJson("/api/users/login", body, &ok, errorMessage);
+    if (!ok || !doc.isObject()) {
+        if (errorMessage && errorMessage->isEmpty()) {
+            *errorMessage = "登录失败，请检查后端是否正在运行";
+        }
+        return false;
     }
 
-    if (errorMessage) {
-        *errorMessage = "账号或密码错误";
+    const QJsonObject user = doc.object();
+    if (user.value("role").toString() != "admin") {
+        if (errorMessage) {
+            *errorMessage = "当前账号不是管理员，请先让后端把该账号 role 改为 admin";
+        }
+        return false;
     }
-    return false;
+
+    token_ = user.value("token").toString();
+    if (token_.isEmpty()) {
+        if (errorMessage) {
+            *errorMessage = "后端没有返回登录 token";
+        }
+        return false;
+    }
+
+    return true;
 }
 
 RevenueSummary AdminApiService::revenueSummary() const
@@ -49,9 +91,11 @@ QList<RevenuePoint> AdminApiService::revenueTrend(int days) const
 
 DeviceStatusSummary AdminApiService::deviceStatusSummary() const
 {
-    // TODO(后端)：替换为 GET /api/admin/chargers/status-summary。
     DeviceStatusSummary summary;
-    for (const StationInfo &station : stations_) {
+    bool ok = false;
+    const QList<StationInfo> rows = backendStations(&ok);
+    const QList<StationInfo> source = ok ? rows : stations_;
+    for (const StationInfo &station : source) {
         for (const ChargerInfo &charger : station.chargers) {
             if (charger.status == "在用") {
                 ++summary.usingCount;
@@ -67,9 +111,11 @@ DeviceStatusSummary AdminApiService::deviceStatusSummary() const
 
 QList<ChargerInfo> AdminApiService::chargers() const
 {
-    // TODO(后端)：替换为 GET /api/admin/chargers。
     QList<ChargerInfo> result;
-    for (const StationInfo &station : stations_) {
+    bool ok = false;
+    const QList<StationInfo> rows = backendStations(&ok);
+    const QList<StationInfo> source = ok ? rows : stations_;
+    for (const StationInfo &station : source) {
         result.append(station.chargers);
     }
     return result;
@@ -77,7 +123,22 @@ QList<ChargerInfo> AdminApiService::chargers() const
 
 bool AdminApiService::restartCharger(const QString &chargerId, QString *message)
 {
-    // TODO(后端)：替换为 POST /api/admin/chargers/{id}/restart。
+    bool ok = false;
+    postJson(QString("/api/charging-points/%1/restart").arg(chargerId.trimmed()),
+             QJsonObject(),
+             &ok,
+             message);
+    if (ok) {
+        if (message) {
+            *message = "重启成功，电桩已恢复空闲";
+        }
+        return true;
+    }
+
+    if (!token_.isEmpty()) {
+        return false;
+    }
+
     for (StationInfo &station : stations_) {
         for (ChargerInfo &charger : station.chargers) {
             if (charger.id == chargerId) {
@@ -104,7 +165,11 @@ bool AdminApiService::restartCharger(const QString &chargerId, QString *message)
 
 QList<StationInfo> AdminApiService::stations() const
 {
-    // TODO(后端)：替换为 GET /api/admin/stations。
+    bool ok = false;
+    const QList<StationInfo> rows = backendStations(&ok);
+    if (ok) {
+        return rows;
+    }
     return stations_;
 }
 
@@ -115,7 +180,6 @@ bool AdminApiService::addStation(const QString &name,
                                  int chargerCount,
                                  QString *message)
 {
-    // TODO(后端)：替换为 POST /api/admin/stations。
     const QString trimmedName = name.trimmed();
     const QString trimmedAddress = address.trimmed();
     if (trimmedName.isEmpty() || trimmedAddress.isEmpty()) {
@@ -136,6 +200,26 @@ bool AdminApiService::addStation(const QString &name,
         }
         return false;
     }
+
+    QJsonObject body;
+    body["name"] = trimmedName;
+    body["latitude"] = latitude;
+    body["longitude"] = longitude;
+    body["total_points"] = chargerCount;
+
+    bool ok = false;
+    postJson("/api/charging-stations/register", body, &ok, message);
+    if (ok) {
+        if (message) {
+            *message = "新增电站成功";
+        }
+        return true;
+    }
+
+    if (!token_.isEmpty()) {
+        return false;
+    }
+
     for (const StationInfo &station : stations_) {
         if (station.name == trimmedName) {
             if (message) {
@@ -275,4 +359,162 @@ int AdminApiService::countOnlineChargers(const StationInfo &station) const
         }
     }
     return count;
+}
+
+QJsonDocument AdminApiService::getJson(const QString &path, bool *ok, QString *errorMessage) const
+{
+    return sendJson("GET", path, nullptr, ok, errorMessage);
+}
+
+QJsonDocument AdminApiService::postJson(const QString &path,
+                                        const QJsonObject &body,
+                                        bool *ok,
+                                        QString *errorMessage) const
+{
+    return sendJson("POST", path, &body, ok, errorMessage);
+}
+
+QJsonDocument AdminApiService::sendJson(const QString &method,
+                                        const QString &path,
+                                        const QJsonObject *body,
+                                        bool *ok,
+                                        QString *errorMessage) const
+{
+    if (ok) {
+        *ok = false;
+    }
+    if (errorMessage) {
+        errorMessage->clear();
+    }
+
+    QNetworkRequest request(QUrl(baseUrl_ + path));
+    request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+    if (!token_.isEmpty()) {
+        request.setRawHeader("Authorization", QByteArray("Bearer ") + token_.toUtf8());
+    }
+
+    QNetworkReply *reply = nullptr;
+    if (method == "GET") {
+        reply = network_.get(request);
+    } else {
+        const QByteArray payload = body ? QJsonDocument(*body).toJson(QJsonDocument::Compact) : QByteArray("{}");
+        reply = network_.post(request, payload);
+    }
+
+    QEventLoop loop;
+    QTimer timer;
+    timer.setSingleShot(true);
+    connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+    connect(&timer, &QTimer::timeout, &loop, &QEventLoop::quit);
+    timer.start(5000);
+    loop.exec();
+
+    if (!timer.isActive()) {
+        reply->abort();
+        reply->deleteLater();
+        if (errorMessage) {
+            *errorMessage = "连接后端超时，请确认后端服务已启动";
+        }
+        return QJsonDocument();
+    }
+
+    const QByteArray data = reply->readAll();
+    const int statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const QNetworkReply::NetworkError networkError = reply->error();
+    reply->deleteLater();
+
+    QJsonParseError parseError;
+    const QJsonDocument doc = QJsonDocument::fromJson(data, &parseError);
+    if (networkError != QNetworkReply::NoError || statusCode < 200 || statusCode >= 300) {
+        if (errorMessage) {
+            const QString fallback = statusCode > 0
+                                         ? QString("后端返回错误：HTTP %1").arg(statusCode)
+                                         : "无法连接后端，请确认服务已启动";
+            *errorMessage = jsonErrorMessage(doc, fallback);
+        }
+        return doc;
+    }
+
+    if (parseError.error != QJsonParseError::NoError) {
+        if (errorMessage) {
+            *errorMessage = "后端返回的数据不是合法 JSON";
+        }
+        return QJsonDocument();
+    }
+
+    if (ok) {
+        *ok = true;
+    }
+    return doc;
+}
+
+QList<StationInfo> AdminApiService::backendStations(bool *ok) const
+{
+    if (ok) {
+        *ok = false;
+    }
+    if (token_.isEmpty()) {
+        return {};
+    }
+
+    bool stationsOk = false;
+    const QJsonDocument doc = getJson("/api/charging-stations", &stationsOk);
+    if (!stationsOk || !doc.isArray()) {
+        return {};
+    }
+
+    QList<StationInfo> rows;
+    const QJsonArray stations = doc.array();
+    for (const QJsonValue &value : stations) {
+        if (!value.isObject()) {
+            continue;
+        }
+        const QJsonObject stationJson = value.toObject();
+        StationInfo station;
+        station.id = stationJson.value("id").toInt();
+        station.name = stationJson.value("name").toString();
+        station.address = "后端暂未返回地址";
+        station.latitude = stationJson.value("latitude").toDouble();
+        station.longitude = stationJson.value("longitude").toDouble();
+        station.price = 0.0;
+
+        bool pointsOk = false;
+        const QJsonDocument pointsDoc = getJson(QString("/api/charging-stations/%1/points").arg(station.id),
+                                                &pointsOk);
+        if (pointsOk && pointsDoc.isArray()) {
+            const QJsonArray points = pointsDoc.array();
+            for (const QJsonValue &pointValue : points) {
+                if (!pointValue.isObject()) {
+                    continue;
+                }
+                const QJsonObject pointJson = pointValue.toObject();
+                ChargerInfo charger;
+                charger.id = QString::number(pointJson.value("id").toInt());
+                charger.stationName = station.name;
+                charger.type = "后端未返回";
+                charger.powerKw = 0.0;
+                charger.status = statusToText(pointJson.value("status").toString());
+                charger.totalSessions = 0;
+                charger.totalHours = 0.0;
+                station.chargers.append(charger);
+            }
+        }
+        rows.append(station);
+    }
+
+    if (ok) {
+        *ok = true;
+    }
+    return rows;
+}
+
+QString AdminApiService::statusToText(const QString &status) const
+{
+    if (status == "working") {
+        return "在用";
+    }
+    if (status == "broken") {
+        return "故障";
+    }
+    return "空闲";
 }

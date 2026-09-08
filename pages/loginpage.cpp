@@ -35,7 +35,7 @@ LoginPage::LoginPage(QWidget *parent)
     passwordEdit_ = new QLineEdit(panel);
     passwordEdit_->setPlaceholderText("密码");
     passwordEdit_->setEchoMode(QLineEdit::Password);
-    passwordEdit_->setText("123456");
+    passwordEdit_->setText("12345678");
 
     errorLabel_ = new QLabel(panel);
     errorLabel_->setObjectName("errorText");
