@@ -2,6 +2,7 @@
 
 #include "service/adminapiservice.h"
 
+#include <QtCharts/QAbstractSeries>
 #include <QtCharts/QChart>
 #include <QtCharts/QChartView>
 #include <QtCharts/QDateTimeAxis>
@@ -13,9 +14,9 @@
 #include <QBrush>
 #include <QColor>
 #include <QComboBox>
-#include <QCursor>
 #include <QDate>
 #include <QDateTime>
+#include <QEvent>
 #include <QFont>
 #include <QFontMetrics>
 #include <QGraphicsPathItem>
@@ -33,12 +34,12 @@
 #include <QPixmap>
 #include <QMouseEvent>
 #include <QTime>
-#include <QToolTip>
 #include <QVBoxLayout>
 #include <QEasingCurve>
 #include <QVariantAnimation>
 #include <QtMath>
 #include <cmath>
+#include <functional>
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -58,11 +59,14 @@ const QColor kMainLineColor("#4b4944");
 const QColor kAccentRed("#d84b35");
 const QColor kAccentRedDark("#a63325");
 const QColor kGuideLineColor("#c85a46");
+const QColor kPreviewGuideLineColor("#b3a89a");
+const QColor kPreviewDotColor("#f0b85a");
 const QColor kAccentYellow("#f7d84a");
 const QColor kStripeBase("#d7d2cc");
 const QColor kStripeLine("#fbfaf7");
 const qreal kHoverScale = 1.06;
-const qreal kGapPx = 5.0;
+const qreal kGapPx = 6.0;
+const qreal kSliceCornerPx = 9.5;
 const qreal kHoverAnimationDurationMs = 240.0;
 
 struct DonutSlice {
@@ -116,21 +120,127 @@ QPointF pointOnCircle(const QPointF &center, qreal radius, qreal degrees)
                    center.y() - std::sin(radians) * radius);
 }
 
-QPainterPath buildDonutSliceArcPath(const QPointF &center,
-                                    qreal radius,
-                                    qreal startAngle,
-                                    qreal span)
+qreal angleFromCenter(const QPointF &center, const QPointF &pos)
+{
+    const qreal dx = pos.x() - center.x();
+    const qreal dy = pos.y() - center.y();
+    return normalizeDegrees(qRadiansToDegrees(std::atan2(-dy, dx)));
+}
+
+QPainterPath buildDonutSlicePath(const QPointF &center,
+                                 qreal outerRadius,
+                                 qreal innerRadius,
+                                 qreal startAngle,
+                                 qreal span)
 {
     QPainterPath path;
-    if (span <= 0.0 || radius <= 0.0) {
+    if (span <= 0.0 || outerRadius <= 0.0 || innerRadius <= 0.0 || outerRadius <= innerRadius) {
         return path;
     }
 
-    const QRectF arcRect(center.x() - radius, center.y() - radius, radius * 2.0, radius * 2.0);
-    path.moveTo(pointOnCircle(center, radius, startAngle));
-    path.arcTo(arcRect, startAngle, -span);
+    const QRectF outerRect(center.x() - outerRadius,
+                           center.y() - outerRadius,
+                           outerRadius * 2.0,
+                           outerRadius * 2.0);
+    const QRectF innerRect(center.x() - innerRadius,
+                           center.y() - innerRadius,
+                           innerRadius * 2.0,
+                           innerRadius * 2.0);
+    const qreal endAngle = startAngle - span;
+    const qreal thickness = outerRadius - innerRadius;
+    const qreal cornerPx = qMin(kSliceCornerPx, thickness * 0.2);
+    const qreal maxCornerDegrees = span * 0.22;
+    const qreal outerCornerDegrees = qMin(qRadiansToDegrees(cornerPx / outerRadius), maxCornerDegrees);
+    const qreal innerCornerDegrees = qMin(qRadiansToDegrees(cornerPx / innerRadius), maxCornerDegrees);
+
+    if (cornerPx <= 0.5 || outerCornerDegrees <= 0.1 || innerCornerDegrees <= 0.1) {
+        path.moveTo(pointOnCircle(center, outerRadius, startAngle));
+        path.arcTo(outerRect, startAngle, -span);
+        path.lineTo(pointOnCircle(center, innerRadius, endAngle));
+        path.arcTo(innerRect, endAngle, span);
+        path.lineTo(pointOnCircle(center, outerRadius, startAngle));
+        path.closeSubpath();
+        return path;
+    }
+
+    const QPointF outerStartArc = pointOnCircle(center, outerRadius, startAngle - outerCornerDegrees);
+    const QPointF outerEndRadial = pointOnCircle(center, outerRadius - cornerPx, endAngle);
+    const QPointF innerEndRadial = pointOnCircle(center, innerRadius + cornerPx, endAngle);
+    const QPointF innerEndArc = pointOnCircle(center, innerRadius, endAngle + innerCornerDegrees);
+    const QPointF innerStartRadial = pointOnCircle(center, innerRadius + cornerPx, startAngle);
+    const QPointF outerStartRadial = pointOnCircle(center, outerRadius - cornerPx, startAngle);
+
+    path.moveTo(outerStartArc);
+    path.arcTo(outerRect, startAngle - outerCornerDegrees, -(span - outerCornerDegrees * 2.0));
+    path.quadTo(pointOnCircle(center, outerRadius, endAngle), outerEndRadial);
+    path.lineTo(innerEndRadial);
+    path.quadTo(pointOnCircle(center, innerRadius, endAngle), innerEndArc);
+    path.arcTo(innerRect, endAngle + innerCornerDegrees, span - innerCornerDegrees * 2.0);
+    path.quadTo(pointOnCircle(center, innerRadius, startAngle), innerStartRadial);
+    path.lineTo(outerStartRadial);
+    path.quadTo(pointOnCircle(center, outerRadius, startAngle), outerStartArc);
+    path.closeSubpath();
     return path;
 }
+
+class RevenueChartView : public QChartView
+{
+public:
+    using MouseHandler = std::function<void(const QPoint &)>;
+    using LeaveHandler = std::function<void()>;
+
+    explicit RevenueChartView(QWidget *parent = nullptr)
+        : QChartView(parent)
+    {
+        setMouseTracking(true);
+        viewport()->setMouseTracking(true);
+    }
+
+    void setMouseMoveHandler(MouseHandler handler)
+    {
+        mouseMoveHandler_ = std::move(handler);
+    }
+
+    void setMouseClickHandler(MouseHandler handler)
+    {
+        mouseClickHandler_ = std::move(handler);
+    }
+
+    void setLeaveHandler(LeaveHandler handler)
+    {
+        leaveHandler_ = std::move(handler);
+    }
+
+protected:
+    void mouseMoveEvent(QMouseEvent *event) override
+    {
+        if (mouseMoveHandler_) {
+            mouseMoveHandler_(event->pos());
+        }
+        QChartView::mouseMoveEvent(event);
+    }
+
+    void mousePressEvent(QMouseEvent *event) override
+    {
+        if (event->button() == Qt::LeftButton && mouseClickHandler_) {
+            mouseClickHandler_(event->pos());
+        }
+        QChartView::mousePressEvent(event);
+    }
+
+    void leaveEvent(QEvent *event) override
+    {
+        if (leaveHandler_) {
+            leaveHandler_();
+        }
+        QChartView::leaveEvent(event);
+    }
+
+private:
+    MouseHandler mouseMoveHandler_;
+    MouseHandler mouseClickHandler_;
+    LeaveHandler leaveHandler_;
+};
 
 class DeviceDonutChart : public QWidget
 {
@@ -185,7 +295,7 @@ protected:
         const qreal innerRadius = outerRadius * 0.42;
         const QPointF center = area.center();
         const qreal baseStart = 90.0;
-        const qreal gapDegrees = sliceGapDegrees((outerRadius + innerRadius) / 2.0);
+        const qreal gapDegrees = 0.0;
 
         QFont titleFont = font();
         titleFont.setPointSize(qMax(9, titleFont.pointSize()));
@@ -197,6 +307,7 @@ protected:
 
         drawSlices(&painter, center, outerRadius, innerRadius, baseStart, gapDegrees, false);
         drawSlices(&painter, center, outerRadius, innerRadius, baseStart, gapDegrees, true);
+        drawSeparators(&painter, center, outerRadius, innerRadius, baseStart);
 
         drawDetailCard(&painter, center, outerRadius, baseStart, gapDegrees, titleFont, detailFont);
         drawLegend(&painter);
@@ -275,19 +386,52 @@ private:
             const qreal scale = hovered ? hoverScale_ : 1.0;
             const qreal pieceOuter = outerRadius * scale;
             const qreal pieceInner = innerRadius * scale;
-            const qreal pieceThickness = qMax<qreal>(1.0, pieceOuter - pieceInner);
-            const qreal pieceRadius = (pieceOuter + pieceInner) / 2.0;
-            const QPainterPath path = buildDonutSliceArcPath(center, pieceRadius, current, revealed);
+            const QPainterPath path = buildDonutSlicePath(center, pieceOuter, pieceInner, current, revealed);
 
             painter->save();
             painter->setOpacity(activeIndex_ >= 0 && i != activeIndex_ ? 0.58 : 1.0);
-            painter->setBrush(Qt::NoBrush);
-            painter->setPen(QPen(slice.brush, pieceThickness, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+            painter->setBrush(slice.brush);
+            painter->setPen(Qt::NoPen);
             painter->drawPath(path);
             painter->restore();
             consumed += fullSpan;
             current -= fullSpan;
         }
+    }
+
+    void drawSeparators(QPainter *painter,
+                        const QPointF &center,
+                        qreal outerRadius,
+                        qreal innerRadius,
+                        qreal baseStart)
+    {
+        const qreal revealAngle = 360.0 * revealProgress_;
+        if (revealAngle <= 0.0) {
+            return;
+        }
+
+        painter->save();
+        painter->setRenderHint(QPainter::Antialiasing);
+        painter->setPen(QPen(kCardBackground, kGapPx, Qt::SolidLine, Qt::FlatCap, Qt::RoundJoin));
+        const qreal separatorOuterRadius = outerRadius * (activeIndex_ >= 0 ? hoverScale_ : 1.0);
+
+        qreal current = baseStart;
+        qreal consumed = 0.0;
+        for (int i = 0; i < slices_.size(); ++i) {
+            if (slices_[i].value <= 0) {
+                continue;
+            }
+
+            const qreal fullSpan = 360.0 * slices_[i].value / total_;
+            if (consumed <= revealAngle + 0.1) {
+                const QPointF outer = pointOnCircle(center, separatorOuterRadius - 0.5, current);
+                const QPointF inner = pointOnCircle(center, innerRadius + 0.5, current);
+                painter->drawLine(inner, outer);
+            }
+            consumed += fullSpan;
+            current -= fullSpan;
+        }
+        painter->restore();
     }
 
     void startRevealAnimation()
@@ -346,25 +490,26 @@ private:
         const QColor borderColor("#171511");
 
         const QString title = slices_[index].label;
-        const QString detailLine = QStringLiteral("%1 台 · %2%")
-                                       .arg(slices_[index].value)
-                                       .arg(100.0 * slices_[index].value / total_, 0, 'f', 1);
+        const QString valueLine = QStringLiteral("数量：%1 台").arg(slices_[index].value);
+        const QString percentLine = QStringLiteral("占比：%1%")
+                                        .arg(100.0 * slices_[index].value / total_, 0, 'f', 1);
         const QFontMetrics titleMetrics(titleFont);
         const QFontMetrics detailMetrics(detailFont);
-        const qreal maxCardWidth = qMin<qreal>(qMax<qreal>(74.0, width() - 28.0), 92.0);
+        const qreal maxCardWidth = qMin<qreal>(qMax<qreal>(86.0, width() - 28.0), 100.0);
         const qreal textMaxWidth = maxCardWidth - 16.0;
         const QRect titleBounds = titleMetrics.boundingRect(QRect(0, 0, static_cast<int>(textMaxWidth), 400), Qt::TextWordWrap, title);
-        const qreal detailWidth = textWidth(detailMetrics, detailLine);
-        qreal cardWidth = qMax<qreal>(74.0, qMax<qreal>(titleBounds.width(), detailWidth) + 16.0);
+        const qreal detailWidth = qMax(textWidth(detailMetrics, valueLine), textWidth(detailMetrics, percentLine));
+        qreal cardWidth = qMax<qreal>(86.0, qMax<qreal>(titleBounds.width(), detailWidth) + 16.0);
         cardWidth = qMin(cardWidth, maxCardWidth);
 
         const QRect finalTitleBounds = titleMetrics.boundingRect(QRect(0, 0, static_cast<int>(cardWidth - 16.0), 400), Qt::TextWordWrap, title);
         const qreal lineHeight = detailMetrics.height();
-        const qreal cardHeight = 13.0 + finalTitleBounds.height() + lineHeight;
+        const qreal cardHeight = 14.0 + finalTitleBounds.height() + lineHeight * 2.0;
 
         const qreal midAngle = sliceMidAngle(index, baseStart, gapDegrees);
-        const QPointF anchor = pointOnCircle(center, outerRadius + 3.5, midAngle);
-        const QRectF bounds = rect().adjusted(10, 8, -10, -24);
+        const QPointF anchor = pointOnCircle(center, outerRadius + 1.0, midAngle);
+        const qreal detailBottom = qMin<qreal>(height() - 24.0, legendTopY() - 8.0);
+        const QRectF bounds(10.0, 8.0, width() - 20.0, qMax<qreal>(cardHeight, detailBottom - 8.0));
         QRectF box = bestDetailCardRect(center, outerRadius, anchor, cardWidth, cardHeight, bounds);
 
         painter->save();
@@ -391,7 +536,11 @@ private:
         painter->setPen(mutedTextColor);
         painter->drawText(QRectF(box.left() + padX, y, box.width() - padX * 2.0, lineHeight),
                           Qt::AlignLeft | Qt::AlignVCenter,
-                          detailLine);
+                          valueLine);
+        y += lineHeight;
+        painter->drawText(QRectF(box.left() + padX, y, box.width() - padX * 2.0, lineHeight),
+                          Qt::AlignLeft | Qt::AlignVCenter,
+                          percentLine);
         painter->restore();
     }
 
@@ -423,7 +572,7 @@ private:
             const qreal nearestY = qBound(rect.top(), center.y(), rect.bottom());
             const qreal dx = nearestX - center.x();
             const qreal dy = nearestY - center.y();
-            return std::hypot(dx, dy) < outerRadius + 2.0;
+            return std::hypot(dx, dy) < outerRadius + 1.5;
         };
 
         auto score = [anchor](const QRectF &rect) {
@@ -433,10 +582,10 @@ private:
         };
 
         QList<QRectF> candidates;
-        candidates.append(QRectF(anchor.x() + 3.5, anchor.y() - cardHeight / 2.0, cardWidth, cardHeight));
-        candidates.append(QRectF(anchor.x() - cardWidth - 3.5, anchor.y() - cardHeight / 2.0, cardWidth, cardHeight));
-        candidates.append(QRectF(anchor.x() - cardWidth / 2.0, anchor.y() - cardHeight - 3.5, cardWidth, cardHeight));
-        candidates.append(QRectF(anchor.x() - cardWidth / 2.0, anchor.y() + 3.5, cardWidth, cardHeight));
+        candidates.append(QRectF(anchor.x() + 1.0, anchor.y() - cardHeight / 2.0, cardWidth, cardHeight));
+        candidates.append(QRectF(anchor.x() - cardWidth - 1.0, anchor.y() - cardHeight / 2.0, cardWidth, cardHeight));
+        candidates.append(QRectF(anchor.x() - cardWidth / 2.0, anchor.y() - cardHeight - 1.0, cardWidth, cardHeight));
+        candidates.append(QRectF(anchor.x() - cardWidth / 2.0, anchor.y() + 1.0, cardWidth, cardHeight));
         candidates.append(QRectF(bounds.left(), bounds.top(), cardWidth, cardHeight));
         candidates.append(QRectF(bounds.right() - cardWidth, bounds.top(), cardWidth, cardHeight));
         candidates.append(QRectF(bounds.left(), bounds.bottom() - cardHeight, cardWidth, cardHeight));
@@ -490,6 +639,41 @@ private:
             current -= fullSpan;
         }
         return baseStart;
+    }
+
+    qreal legendTopY() const
+    {
+        QFont legendFont = font();
+        legendFont.setPointSize(qMax(9, legendFont.pointSize() - 1));
+        const QFontMetrics fm(legendFont);
+
+        const qreal maxWidth = width() - 44.0;
+        qreal x = 22.0;
+        qreal y = height() - 16.0;
+        qreal top = y - 11.0;
+        bool firstInRow = true;
+        for (const auto &slice : slices_) {
+            if (slice.value <= 0) {
+                continue;
+            }
+
+            const qreal textMaxWidth = 132.0;
+            const QRect labelBounds = fm.boundingRect(QRect(0, 0, static_cast<int>(textMaxWidth), 120),
+                                                      Qt::TextWordWrap,
+                                                      slice.label);
+            const qreal itemWidth = 10.0 + 6.0 + labelBounds.width() + 18.0;
+            if (!firstInRow && x + itemWidth > maxWidth + 22.0) {
+                x = 22.0;
+                y -= qMax<qreal>(18.0, labelBounds.height() + 2.0);
+                firstInRow = true;
+            }
+
+            top = qMin(top, y - 11.0);
+            x += 14.0 + labelBounds.width() + 18.0;
+            firstInRow = false;
+        }
+
+        return top;
     }
 
     void drawLegend(QPainter *painter)
@@ -553,7 +737,7 @@ private:
         const qreal outerRadius = size * 0.5;
         const qreal innerRadius = outerRadius * 0.42;
         const QPointF center = area.center();
-        const qreal gapDegrees = sliceGapDegrees((outerRadius + innerRadius) / 2.0);
+        const qreal gapDegrees = 0.0;
         const qreal baseStart = 90.0;
         const qreal dx = pos.x() - center.x();
         const qreal dy = pos.y() - center.y();
@@ -563,9 +747,7 @@ private:
             return;
         }
 
-        qreal angle = qRadiansToDegrees(std::atan2(dy, dx));
-        angle += 90.0;
-        angle = normalizeDegrees(angle);
+        const qreal angle = angleFromCenter(center, pos);
 
         qreal current = baseStart + gapDegrees / 2.0;
         int nextIndex = -1;
@@ -670,7 +852,7 @@ private:
         const qreal outerRadius = size * 0.5;
         const qreal innerRadius = outerRadius * 0.42;
         const QPointF center = area.center();
-        const qreal gapDegrees = sliceGapDegrees((outerRadius + innerRadius) / 2.0);
+        const qreal gapDegrees = 0.0;
         const qreal baseStart = 90.0;
         const qreal dx = pos.x() - center.x();
         const qreal dy = pos.y() - center.y();
@@ -679,9 +861,7 @@ private:
             return -1;
         }
 
-        qreal angle = qRadiansToDegrees(std::atan2(dy, dx));
-        angle += 90.0;
-        angle = normalizeDegrees(angle);
+        const qreal angle = angleFromCenter(center, pos);
 
         qreal current = baseStart + gapDegrees / 2.0;
         for (int i = 0; i < slices_.size(); ++i) {
@@ -697,29 +877,6 @@ private:
             current -= fullSpan;
         }
         return -1;
-    }
-
-    qreal sliceGapDegrees(qreal midRadius) const
-    {
-        if (total_ <= 0) {
-            return 0.0;
-        }
-
-        qreal minSpan = 360.0;
-        int positiveCount = 0;
-        for (const auto &slice : slices_) {
-            if (slice.value <= 0) {
-                continue;
-            }
-            ++positiveCount;
-            minSpan = qMin(minSpan, 360.0 * slice.value / total_);
-        }
-        if (positiveCount <= 0) {
-            return 0.0;
-        }
-
-        const qreal targetGapDegrees = qRadiansToDegrees(kGapPx / qMax<qreal>(1.0, midRadius));
-        return qMax<qreal>(0.0, qMin(targetGapDegrees, minSpan * 0.22));
     }
 
     QList<DonutSlice> slices_;
@@ -800,12 +957,12 @@ DashboardPage::DashboardPage(AdminApiService *service, QWidget *parent)
     chartHeader->addWidget(rangeBox_);
     chartLayout->addLayout(chartHeader);
 
-    chartView_ = new QChartView(chartPanel);
+    chartView_ = new RevenueChartView(chartPanel);
     chartView_->setMinimumHeight(280);
     chartView_->setRenderHint(QPainter::Antialiasing);
     chartLayout->addWidget(chartView_);
 
-    chartHint_ = new QLabel("提示：鼠标移到折线点上可查看当天营收，点击点可固定查看数值。", chartPanel);
+    chartHint_ = new QLabel("提示：鼠标在图中移动可预览当天营收，点击可固定查看详细数值。", chartPanel);
     chartHint_->setObjectName("hintText");
     chartLayout->addWidget(chartHint_);
     analyticsRow->addWidget(chartPanel, 2);
@@ -847,6 +1004,8 @@ QLabel *DashboardPage::createMetric(const QString &title)
 
 void DashboardPage::updateChart(int days)
 {
+    const QString defaultHint = "提示：鼠标在图中移动可预览当天营收，点击可固定查看详细数值。";
+
     auto *curve = new QSplineSeries();
     curve->setName("已完成订单营收");
     curve->setPen(QPen(kMainLineColor, 2));
@@ -859,19 +1018,37 @@ void DashboardPage::updateChart(int days)
     pointsSeries->setBorderColor(kTextColor);
 
     auto *selectedVerticalLine = new QLineSeries();
-    selectedVerticalLine->setName("选中点竖向指示线");
-    QPen guidePen(kGuideLineColor, 1);
+    selectedVerticalLine->setName("固定点竖向指示线");
+    QPen guidePen(kGuideLineColor, 1.6);
     guidePen.setStyle(Qt::DashLine);
     selectedVerticalLine->setPen(guidePen);
 
     auto *selectedHorizontalLine = new QLineSeries();
-    selectedHorizontalLine->setName("选中点横向指示线");
+    selectedHorizontalLine->setName("固定点横向指示线");
     selectedHorizontalLine->setPen(guidePen);
 
+    auto *previewVerticalLine = new QLineSeries();
+    previewVerticalLine->setName("预览点竖向指示线");
+    QPen previewGuidePen(kPreviewGuideLineColor, 1.0);
+    previewGuidePen.setStyle(Qt::DashLine);
+    previewVerticalLine->setPen(previewGuidePen);
+
+    auto *previewHorizontalLine = new QLineSeries();
+    previewHorizontalLine->setName("预览点横向指示线");
+    previewHorizontalLine->setPen(previewGuidePen);
+
+    auto *previewSeries = new QScatterSeries();
+    previewSeries->setName("预览点");
+    previewSeries->setMarkerShape(QScatterSeries::MarkerShapeCircle);
+    previewSeries->setMarkerSize(10);
+    previewSeries->setColor(kPreviewDotColor);
+    previewSeries->setBorderColor(kPreviewGuideLineColor);
+    previewSeries->setPointLabelsVisible(false);
+
     auto *selectedSeries = new QScatterSeries();
-    selectedSeries->setName("选中点");
+    selectedSeries->setName("固定点");
     selectedSeries->setMarkerShape(QScatterSeries::MarkerShapeCircle);
-    selectedSeries->setMarkerSize(12);
+    selectedSeries->setMarkerSize(13);
     selectedSeries->setColor(kAccentRed);
     selectedSeries->setBorderColor(kAccentRedDark);
     selectedSeries->setPointLabelsVisible(false);
@@ -888,24 +1065,53 @@ void DashboardPage::updateChart(int days)
         pointsSeries->append(x, points[i].amount);
         maxValue = qMax(maxValue, points[i].amount);
     }
-    if (!points.isEmpty()) {
-        if (selectedRevenueIndex_ < 0 || selectedRevenueIndex_ >= points.size()) {
-            selectedRevenueIndex_ = qMin(4, points.size() - 1);
+
+    const int tickStep = 100;
+    const int axisMax = qMax(tickStep, static_cast<int>(qCeil((maxValue + 60.0) / tickStep)) * tickStep);
+
+    auto setCrosshair = [points, xValueForDate, axisMax](int index,
+                                                         QLineSeries *verticalLine,
+                                                         QLineSeries *horizontalLine,
+                                                         QScatterSeries *markerSeries) {
+        verticalLine->clear();
+        horizontalLine->clear();
+        markerSeries->clear();
+        const bool validIndex = index >= 0 && index < points.size();
+        verticalLine->setVisible(validIndex);
+        horizontalLine->setVisible(validIndex);
+        markerSeries->setVisible(validIndex);
+        if (!validIndex) {
+            return;
         }
-        const double selectedX = xValueForDate(points[selectedRevenueIndex_].date);
-        const double selectedY = points[selectedRevenueIndex_].amount;
-        selectedVerticalLine->append(selectedX, 0.0);
-        selectedVerticalLine->append(selectedX, selectedY);
-        selectedHorizontalLine->append(xValueForDate(points.first().date), selectedY);
-        selectedHorizontalLine->append(xValueForDate(points.last().date), selectedY);
-        selectedSeries->append(selectedX, selectedY);
+
+        const qreal selectedX = xValueForDate(points[index].date);
+        const qreal selectedY = points[index].amount;
+        verticalLine->append(selectedX, 0.0);
+        verticalLine->append(selectedX, axisMax);
+        horizontalLine->append(xValueForDate(points.first().date), selectedY);
+        horizontalLine->append(xValueForDate(points.last().date), selectedY);
+        markerSeries->append(selectedX, selectedY);
+    };
+
+    previewVerticalLine->setVisible(false);
+    previewHorizontalLine->setVisible(false);
+    previewSeries->setVisible(false);
+
+    if (!points.isEmpty()) {
+        if (selectedRevenueIndex_ >= points.size()) {
+            selectedRevenueIndex_ = -1;
+        }
+        setCrosshair(selectedRevenueIndex_, selectedVerticalLine, selectedHorizontalLine, selectedSeries);
     }
 
     auto *chart = new QChart();
-    chart->addSeries(selectedHorizontalLine);
-    chart->addSeries(selectedVerticalLine);
     chart->addSeries(curve);
     chart->addSeries(pointsSeries);
+    chart->addSeries(previewHorizontalLine);
+    chart->addSeries(previewVerticalLine);
+    chart->addSeries(previewSeries);
+    chart->addSeries(selectedHorizontalLine);
+    chart->addSeries(selectedVerticalLine);
     chart->addSeries(selectedSeries);
     chart->legend()->setVisible(false);
     chart->setBackgroundVisible(false);
@@ -927,8 +1133,6 @@ void DashboardPage::updateChart(int days)
     axisX->setGridLineVisible(false);
 
     auto *axisY = new QValueAxis();
-    const int tickStep = 100;
-    const int axisMax = qMax(tickStep, static_cast<int>(qCeil((maxValue + 60.0) / tickStep)) * tickStep);
     axisY->setRange(0, axisMax);
     axisY->setTickCount(axisMax / tickStep + 1);
     axisY->setLabelFormat("%.0f");
@@ -937,53 +1141,122 @@ void DashboardPage::updateChart(int days)
 
     chart->addAxis(axisX, Qt::AlignBottom);
     chart->addAxis(axisY, Qt::AlignLeft);
-    selectedHorizontalLine->attachAxis(axisX);
-    selectedHorizontalLine->attachAxis(axisY);
-    selectedVerticalLine->attachAxis(axisX);
-    selectedVerticalLine->attachAxis(axisY);
     curve->attachAxis(axisX);
     curve->attachAxis(axisY);
     pointsSeries->attachAxis(axisX);
     pointsSeries->attachAxis(axisY);
+    previewHorizontalLine->attachAxis(axisX);
+    previewHorizontalLine->attachAxis(axisY);
+    previewVerticalLine->attachAxis(axisX);
+    previewVerticalLine->attachAxis(axisY);
+    previewSeries->attachAxis(axisX);
+    previewSeries->attachAxis(axisY);
+    selectedHorizontalLine->attachAxis(axisX);
+    selectedHorizontalLine->attachAxis(axisY);
+    selectedVerticalLine->attachAxis(axisX);
+    selectedVerticalLine->attachAxis(axisY);
     selectedSeries->attachAxis(axisX);
     selectedSeries->attachAxis(axisY);
     chartView_->setChart(chart);
 
-    if (!points.isEmpty()) {
-        auto *badgeBox = new QGraphicsPathItem(chart);
-        badgeBox->setBrush(QBrush(kTitleColor));
-        badgeBox->setPen(QPen(kTitleColor));
-        badgeBox->setZValue(20);
+    auto updateBadge = [chart, points, xValueForDate](QGraphicsPathItem *badgeBox,
+                                                      QGraphicsSimpleTextItem *badgeText,
+                                                      QAbstractSeries *series,
+                                                      int index,
+                                                      const QString &text,
+                                                      qreal yOffset) {
+        const bool validIndex = index >= 0 && index < points.size();
+        badgeBox->setVisible(validIndex);
+        badgeText->setVisible(validIndex);
+        if (!validIndex) {
+            return;
+        }
 
-        auto *badgeText = new QGraphicsSimpleTextItem(
-            QString("%1 元").arg(points[selectedRevenueIndex_].amount, 0, 'f', 0), chart);
-        badgeText->setBrush(QBrush(QColor("#fffaf4")));
-        badgeText->setFont(QFont("Segoe UI", 10, QFont::DemiBold));
-        badgeText->setZValue(21);
+        badgeText->setText(text);
+        const QPointF pointPos = chart->mapToPosition(
+            QPointF(xValueForDate(points[index].date), points[index].amount),
+            series);
+        const QRectF textRect = badgeText->boundingRect();
+        const double width = textRect.width() + 22.0;
+        const double height = 24.0;
+        const QRectF plotArea = chart->plotArea();
+        const double boxX = qBound(plotArea.left() + 4.0,
+                                   pointPos.x() - width / 2.0,
+                                   plotArea.right() - width - 4.0);
+        double boxY = pointPos.y() - yOffset;
+        if (boxY < plotArea.top() + 4.0) {
+            boxY = pointPos.y() + 14.0;
+        }
+        const QRectF box(boxX, boxY, width, height);
+        QPainterPath path;
+        path.addRoundedRect(box, height / 2.0, height / 2.0);
+        badgeBox->setPath(path);
+        badgeText->setPos(box.x() + 11.0, box.y() + 3.0);
+    };
 
-        auto updateBadge = [=]() {
-            const QPointF pointPos = chart->mapToPosition(
-                QPointF(xValueForDate(points[selectedRevenueIndex_].date), points[selectedRevenueIndex_].amount),
-                selectedSeries);
-            const QRectF textRect = badgeText->boundingRect();
-            const double width = textRect.width() + 22.0;
-            const double height = 24.0;
-            const QRectF box(pointPos.x() - width / 2.0, pointPos.y() - 44.0, width, height);
-            QPainterPath path;
-            path.addRoundedRect(box, height / 2.0, height / 2.0);
-            badgeBox->setPath(path);
-            badgeText->setPos(box.x() + 11.0, box.y() + 3.0);
-        };
+    auto briefText = [points](int index) {
+        return QString("%1：%2 元")
+            .arg(points[index].date.toString("MM-dd"))
+            .arg(points[index].amount, 0, 'f', 0);
+    };
 
-        updateBadge();
-        connect(chart, &QChart::plotAreaChanged, this, updateBadge);
-    }
+    auto detailText = [points](int index) {
+        return QString("%1，营收 %2 元")
+            .arg(points[index].date.toString("yyyy-MM-dd"))
+            .arg(points[index].amount, 0, 'f', 2);
+    };
 
-    auto indexForPoint = [points, xValueForDate](const QPointF &point) {
+    auto *fixedBadgeBox = new QGraphicsPathItem(chart);
+    fixedBadgeBox->setBrush(QBrush(kTitleColor));
+    fixedBadgeBox->setPen(QPen(kTitleColor));
+    fixedBadgeBox->setZValue(24);
+
+    auto *fixedBadgeText = new QGraphicsSimpleTextItem(chart);
+    fixedBadgeText->setBrush(QBrush(QColor("#fffaf4")));
+    fixedBadgeText->setFont(QFont("Segoe UI", 10, QFont::DemiBold));
+    fixedBadgeText->setZValue(25);
+
+    auto *previewBadgeBox = new QGraphicsPathItem(chart);
+    previewBadgeBox->setBrush(QBrush(QColor("#fffaf4")));
+    previewBadgeBox->setPen(QPen(kPreviewGuideLineColor));
+    previewBadgeBox->setZValue(20);
+
+    auto *previewBadgeText = new QGraphicsSimpleTextItem(chart);
+    previewBadgeText->setBrush(QBrush(kTextColor));
+    previewBadgeText->setFont(QFont("Segoe UI", 9, QFont::DemiBold));
+    previewBadgeText->setZValue(21);
+
+    auto updateFixedBadge = [=]() {
+        if (selectedRevenueIndex_ < 0 || selectedRevenueIndex_ >= points.size()) {
+            updateBadge(fixedBadgeBox, fixedBadgeText, selectedSeries, -1, QString(), 44.0);
+            return;
+        }
+        updateBadge(fixedBadgeBox,
+                    fixedBadgeText,
+                    selectedSeries,
+                    selectedRevenueIndex_,
+                    briefText(selectedRevenueIndex_),
+                    44.0);
+    };
+
+    auto updatePreviewBadge = [=](int index) {
+        updateBadge(previewBadgeBox,
+                    previewBadgeText,
+                    previewSeries,
+                    index,
+                    index >= 0 && index < points.size() ? briefText(index) : QString(),
+                    36.0);
+    };
+
+    updateFixedBadge();
+    updatePreviewBadge(-1);
+    connect(chart, &QChart::plotAreaChanged, this, updateFixedBadge);
+
+    auto indexForPoint = [points, xValueForDate](qreal xValue) {
         int bestIndex = -1;
         qreal bestDistance = 1.0e30;
         for (int i = 0; i < points.size(); ++i) {
-            const qreal distance = qAbs(point.x() - xValueForDate(points[i].date));
+            const qreal distance = qAbs(xValue - xValueForDate(points[i].date));
             if (distance < bestDistance) {
                 bestDistance = distance;
                 bestIndex = i;
@@ -992,63 +1265,62 @@ void DashboardPage::updateChart(int days)
         return bestIndex;
     };
 
-    connect(pointsSeries, &QScatterSeries::hovered, this, [this, points, indexForPoint](const QPointF &point, bool state) {
-        if (!state) {
-            chartHint_->setText("提示：鼠标移到折线点上可查看当天营收，点击点可固定查看数值。");
-            return;
+    auto indexForMousePosition = [=](const QPoint &position) {
+        if (points.isEmpty()) {
+            return -1;
         }
+        const QPointF scenePoint = chartView_->mapToScene(position);
+        const QPointF chartPoint = chart->mapFromScene(scenePoint);
+        if (!chart->plotArea().adjusted(-4.0, -4.0, 4.0, 4.0).contains(chartPoint)) {
+            return -1;
+        }
+        const QPointF value = chart->mapToValue(chartPoint, curve);
+        return indexForPoint(value.x());
+    };
 
-        const int index = indexForPoint(point);
-        if (index < 0 || index >= points.size()) {
+    auto showFixedHint = [=]() {
+        if (selectedRevenueIndex_ >= 0 && selectedRevenueIndex_ < points.size()) {
+            chartHint_->setText(QString("已固定 %1").arg(detailText(selectedRevenueIndex_)));
+        } else {
+            chartHint_->setText(defaultHint);
+        }
+    };
+
+    auto *revenueChartView = dynamic_cast<RevenueChartView *>(chartView_);
+    if (!revenueChartView) {
+        chartHint_->setText(defaultHint);
+        return;
+    }
+
+    revenueChartView->setMouseMoveHandler([=](const QPoint &position) {
+        const int index = indexForMousePosition(position);
+        setCrosshair(index, previewVerticalLine, previewHorizontalLine, previewSeries);
+        updatePreviewBadge(index);
+        if (index < 0) {
+            showFixedHint();
             return;
         }
-        const QString text = QString("%1：%2 元")
-                                 .arg(points[index].date.toString("yyyy-MM-dd"))
-                                 .arg(points[index].amount, 0, 'f', 2);
-        chartHint_->setText(text);
-        QToolTip::showText(QCursor::pos(), text, chartView_);
+        chartHint_->setText(QString("预览 %1，点击可固定。").arg(briefText(index)));
     });
 
-    connect(pointsSeries, &QScatterSeries::clicked, this, [this, points, indexForPoint](const QPointF &point) {
-        const int index = indexForPoint(point);
-        if (index < 0 || index >= points.size()) {
+    revenueChartView->setMouseClickHandler([=](const QPoint &position) {
+        const int index = indexForMousePosition(position);
+        if (index < 0) {
             return;
         }
         selectedRevenueIndex_ = index;
-        updateChart(rangeBox_->currentData().toInt());
-        chartHint_->setText(QString("已选中 %1，营收 %2 元")
-                                .arg(points[index].date.toString("yyyy-MM-dd"))
-                                .arg(points[index].amount, 0, 'f', 2));
+        setCrosshair(selectedRevenueIndex_, selectedVerticalLine, selectedHorizontalLine, selectedSeries);
+        updateFixedBadge();
+        chartHint_->setText(QString("已固定 %1").arg(detailText(selectedRevenueIndex_)));
     });
 
-    connect(selectedSeries, &QScatterSeries::hovered, this, [this, points, indexForPoint](const QPointF &point, bool state) {
-        if (!state) {
-            chartHint_->setText("提示：鼠标移到折线点上可查看当天营收，点击点可固定查看数值。");
-            return;
-        }
-
-        const int index = indexForPoint(point);
-        if (index < 0 || index >= points.size()) {
-            return;
-        }
-        const QString text = QString("选中点 %1：%2 元")
-                                 .arg(points[index].date.toString("yyyy-MM-dd"))
-                                 .arg(points[index].amount, 0, 'f', 2);
-        chartHint_->setText(text);
-        QToolTip::showText(QCursor::pos(), text, chartView_);
+    revenueChartView->setLeaveHandler([=]() {
+        setCrosshair(-1, previewVerticalLine, previewHorizontalLine, previewSeries);
+        updatePreviewBadge(-1);
+        showFixedHint();
     });
 
-    connect(selectedSeries, &QScatterSeries::clicked, this, [this, points, indexForPoint](const QPointF &point) {
-        const int index = indexForPoint(point);
-        if (index < 0 || index >= points.size()) {
-            return;
-        }
-        selectedRevenueIndex_ = index;
-        updateChart(rangeBox_->currentData().toInt());
-        chartHint_->setText(QString("已选中 %1，营收 %2 元")
-                                .arg(points[index].date.toString("yyyy-MM-dd"))
-                                .arg(points[index].amount, 0, 'f', 2));
-    });
+    showFixedHint();
 }
 
 void DashboardPage::updateDeviceSummary()
