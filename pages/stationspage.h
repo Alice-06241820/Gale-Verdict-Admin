@@ -7,7 +7,6 @@ class AdminApiService;
 class QDoubleSpinBox;
 class QLineEdit;
 class QPushButton;
-class QSpinBox;
 class QTableWidget;
 
 class StationsPage : public QWidget
@@ -24,15 +23,17 @@ private:
     void fillStationTable();
     void fillDetailTable(int stationRow);
     void submitStation();
+    void addPointRow(const QString &type, double powerKw);
 
     AdminApiService *service_ = nullptr;
     QTableWidget *stationTable_ = nullptr;
     QTableWidget *detailTable_ = nullptr;
+    QTableWidget *pointsEditTable_ = nullptr;
+    QPushButton *addPointButton_ = nullptr;
+    QPushButton *removePointButton_ = nullptr;
     QLineEdit *nameEdit_ = nullptr;
-    QLineEdit *addressEdit_ = nullptr;
     QDoubleSpinBox *latSpin_ = nullptr;
     QDoubleSpinBox *lngSpin_ = nullptr;
-    QSpinBox *chargerCountSpin_ = nullptr;
 };
 
 #endif // STATIONSPAGE_H

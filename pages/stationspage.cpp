@@ -4,16 +4,17 @@
 #include "service/adminapiservice.h"
 
 #include <QAbstractItemView>
+#include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QFrame>
 #include <QFormLayout>
 #include <QGridLayout>
 #include <QHeaderView>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QPushButton>
-#include <QSpinBox>
 #include <QTableWidget>
 #include <QTableWidgetItem>
 #include <QVBoxLayout>
@@ -87,8 +88,6 @@ StationsPage::StationsPage(AdminApiService *service, QWidget *parent)
 
     nameEdit_ = new QLineEdit(formPanel);
     nameEdit_->setPlaceholderText("例如：大学城快充站");
-    addressEdit_ = new QLineEdit(formPanel);
-    addressEdit_->setPlaceholderText("详细地址");
     latSpin_ = new QDoubleSpinBox(formPanel);
     latSpin_->setRange(-90.0, 90.0);
     latSpin_->setDecimals(6);
@@ -97,17 +96,58 @@ StationsPage::StationsPage(AdminApiService *service, QWidget *parent)
     lngSpin_->setRange(-180.0, 180.0);
     lngSpin_->setDecimals(6);
     lngSpin_->setValue(116.320000);
-    chargerCountSpin_ = new QSpinBox(formPanel);
-    chargerCountSpin_->setRange(1, 50);
-    chargerCountSpin_->setValue(4);
     auto *submitButton = new QPushButton("新增电站", formPanel);
     submitButton->setObjectName("primaryButton");
 
+    pointsEditTable_ = new QTableWidget(formPanel);
+    pointsEditTable_->setColumnCount(2);
+    pointsEditTable_->setHorizontalHeaderLabels({"类型", "功率(kW)"});
+    pointsEditTable_->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    pointsEditTable_->verticalHeader()->setVisible(false);
+    pointsEditTable_->verticalHeader()->setDefaultSectionSize(36);
+    pointsEditTable_->setFrameShape(QFrame::NoFrame);
+    pointsEditTable_->setShowGrid(false);
+    pointsEditTable_->setAlternatingRowColors(true);
+    pointsEditTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    pointsEditTable_->setSelectionMode(QAbstractItemView::SingleSelection);
+    pointsEditTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    pointsEditTable_->setFixedHeight(122);
+
+    addPointButton_ = new QPushButton("添加电桩", formPanel);
+    removePointButton_ = new QPushButton("移除选中", formPanel);
+    auto *pointButtonsLayout = new QHBoxLayout();
+    pointButtonsLayout->setContentsMargins(0, 0, 0, 0);
+    pointButtonsLayout->addWidget(addPointButton_);
+    pointButtonsLayout->addWidget(removePointButton_);
+    pointButtonsLayout->addStretch(1);
+
+    auto *pointsBox = new QWidget(formPanel);
+    auto *pointsLayout = new QVBoxLayout(pointsBox);
+    pointsLayout->setContentsMargins(0, 0, 0, 0);
+    pointsLayout->setSpacing(8);
+    pointsLayout->addWidget(pointsEditTable_);
+    pointsLayout->addLayout(pointButtonsLayout);
+
+    addPointRow("DC", 60.0);
+    connect(addPointButton_, &QPushButton::clicked, this, [this] {
+        if (pointsEditTable_->rowCount() >= 50) {
+            return;
+        }
+        addPointRow("DC", 60.0);
+    });
+    connect(removePointButton_, &QPushButton::clicked, this, [this] {
+        if (pointsEditTable_->rowCount() <= 1) {
+            return;
+        }
+        const int row = pointsEditTable_->currentRow();
+        pointsEditTable_->removeRow(row >= 0 ? row
+                                             : pointsEditTable_->rowCount() - 1);
+    });
+
     formLayout->addRow("站名", nameEdit_);
-    formLayout->addRow("地址", addressEdit_);
     formLayout->addRow("纬度", latSpin_);
     formLayout->addRow("经度", lngSpin_);
-    formLayout->addRow("电桩数量", chargerCountSpin_);
+    formLayout->addRow("电桩明细", pointsBox);
     formLayout->addRow(submitButton);
     content->addWidget(formPanel, 0, 1);
 
@@ -228,19 +268,54 @@ void StationsPage::fillDetailTable(int stationRow)
     }
 }
 
+void StationsPage::addPointRow(const QString &type, double powerKw)
+{
+    const int row = pointsEditTable_->rowCount();
+    pointsEditTable_->insertRow(row);
+
+    auto *typeBox = new QComboBox(pointsEditTable_);
+    typeBox->addItem("直流快充 (DC)", "DC");
+    typeBox->addItem("交流慢充 (AC)", "AC");
+    const int typeIndex = typeBox->findData(type);
+    typeBox->setCurrentIndex(typeIndex >= 0 ? typeIndex : 0);
+    pointsEditTable_->setCellWidget(row, 0, typeBox);
+
+    auto *powerSpin = new QDoubleSpinBox(pointsEditTable_);
+    powerSpin->setRange(0.1, 2000.0);
+    powerSpin->setDecimals(1);
+    powerSpin->setSuffix(" kW");
+    powerSpin->setValue(powerKw);
+    pointsEditTable_->setCellWidget(row, 1, powerSpin);
+}
+
 void StationsPage::submitStation()
 {
+    QList<PointInput> points;
+    const int rows = pointsEditTable_->rowCount();
+    for (int row = 0; row < rows; ++row) {
+        PointInput input;
+        if (auto *typeBox = qobject_cast<QComboBox *>(
+                pointsEditTable_->cellWidget(row, 0))) {
+            input.type = typeBox->currentData().toString();
+        }
+        if (auto *powerSpin = qobject_cast<QDoubleSpinBox *>(
+                pointsEditTable_->cellWidget(row, 1))) {
+            input.powerKw = powerSpin->value();
+        }
+        points.append(input);
+    }
+
     QString message;
     const bool ok = service_->addStation(nameEdit_->text(),
-                                         addressEdit_->text(),
                                          latSpin_->value(),
                                          lngSpin_->value(),
-                                         chargerCountSpin_->value(),
+                                         points,
                                          &message);
     QMessageBox::information(this, ok ? "新增成功" : "新增失败", message);
     if (ok) {
         nameEdit_->clear();
-        addressEdit_->clear();
+        pointsEditTable_->setRowCount(0);
+        addPointRow("DC", 60.0);
         refresh();
     }
 }

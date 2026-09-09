@@ -211,17 +211,15 @@ QList<StationInfo> AdminApiService::stations() const
 }
 
 bool AdminApiService::addStation(const QString &name,
-                                 const QString &address,
                                  double latitude,
                                  double longitude,
-                                 int chargerCount,
+                                 const QList<PointInput> &points,
                                  QString *message)
 {
     const QString trimmedName = name.trimmed();
-    const QString trimmedAddress = address.trimmed();
-    if (trimmedName.isEmpty() || trimmedAddress.isEmpty()) {
+    if (trimmedName.isEmpty()) {
         if (message) {
-            *message = "站名和地址不能为空";
+            *message = "站名不能为空";
         }
         return false;
     }
@@ -231,24 +229,46 @@ bool AdminApiService::addStation(const QString &name,
         }
         return false;
     }
-    if (chargerCount <= 0 || chargerCount > 50) {
+    if (points.isEmpty() || points.size() > 50) {
         if (message) {
-            *message = "电桩数量需在 1 到 50 之间";
+            *message = "请至少添加 1 个电桩（最多 50 个）";
         }
         return false;
+    }
+    for (const PointInput &point : points) {
+        if (point.type != "DC" && point.type != "AC") {
+            if (message) {
+                *message = "电桩类型无效（仅支持 DC 或 AC）";
+            }
+            return false;
+        }
+        if (!(point.powerKw > 0.0)) {
+            if (message) {
+                *message = "电桩功率必须大于 0";
+            }
+            return false;
+        }
+    }
+
+    QJsonArray pointsArray;
+    for (const PointInput &point : points) {
+        QJsonObject entry;
+        entry["type"] = point.type;
+        entry["power_kw"] = point.powerKw;
+        pointsArray.append(entry);
     }
 
     QJsonObject body;
     body["name"] = trimmedName;
     body["latitude"] = latitude;
     body["longitude"] = longitude;
-    body["total_points"] = chargerCount;
+    body["points"] = pointsArray;
 
     bool ok = false;
     postJson("/api/charging-stations/register", body, &ok, message);
     if (ok) {
         if (message) {
-            *message = "新增电站成功";
+            *message = QString("新增电站成功（含 %1 个电桩）").arg(points.size());
         }
         return true;
     }
@@ -269,16 +289,18 @@ bool AdminApiService::addStation(const QString &name,
     StationInfo station;
     station.id = stations_.isEmpty() ? 1 : stations_.last().id + 1;
     station.name = trimmedName;
-    station.address = trimmedAddress;
     station.latitude = latitude;
     station.longitude = longitude;
     station.price = 1.28;
-    for (int i = 1; i <= chargerCount; ++i) {
+    for (int i = 0; i < points.size(); ++i) {
+        const PointInput &input = points.at(i);
         ChargerInfo charger;
-        charger.id = QString("S%1-C%2").arg(station.id, 3, 10, QChar('0')).arg(i, 2, 10, QChar('0'));
+        charger.id = QString("S%1-C%2")
+                         .arg(station.id, 3, 10, QChar('0'))
+                         .arg(i + 1, 2, 10, QChar('0'));
         charger.stationName = station.name;
-        charger.type = i % 2 == 0 ? "快充" : "慢充";
-        charger.powerKw = i % 2 == 0 ? 120.0 : 60.0;
+        charger.type = input.type == "DC" ? "快充" : "慢充";
+        charger.powerKw = input.powerKw;
         charger.status = "空闲";
         station.chargers.append(charger);
     }

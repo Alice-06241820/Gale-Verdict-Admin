@@ -26,10 +26,9 @@ public:
 
     QList<StationInfo> stations() const;
     bool addStation(const QString &name,
-                    const QString &address,
                     double latitude,
                     double longitude,
-                    int chargerCount,
+                    const QList<PointInput> &points,
                     QString *message = nullptr);
 
     QList<UserInfo> users(const QString &phoneKeyword = QString()) const;
