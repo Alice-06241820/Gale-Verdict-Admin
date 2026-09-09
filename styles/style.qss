@@ -1,6 +1,6 @@
 * {
     font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
-    font-size: 14px;
+    font-size: 15px;
     color: #1f1d1a;
 }
 
@@ -23,7 +23,7 @@ QMainWindow,
 }
 
 #loginTitle {
-    font-size: 28px;
+    font-size: 30px;
     font-weight: 700;
     color: #151411;
 }
@@ -37,13 +37,13 @@ QMainWindow,
 }
 
 #pageTitle {
-    font-size: 28px;
+    font-size: 30px;
     font-weight: 700;
     color: #171511;
 }
 
 #sectionTitle {
-    font-size: 16px;
+    font-size: 17px;
     font-weight: 700;
     color: #171511;
 }
@@ -55,7 +55,7 @@ QMainWindow,
 
 #brandTitle {
     color: #151411;
-    font-size: 21px;
+    font-size: 22px;
     font-weight: 700;
 }
 
@@ -190,7 +190,7 @@ QDoubleSpinBox::down-arrow {
 }
 
 QPushButton {
-    min-height: 38px;
+    min-height: 40px;
     padding: 7px 16px;
     border-radius: 14px;
     background: #e8e2da;
@@ -283,7 +283,7 @@ QTableWidget {
 
 QTableWidget::item {
     border: 0;
-    padding: 8px 10px;
+    padding: 10px 10px;
 }
 
 QTableWidget::item:selected {
@@ -291,10 +291,18 @@ QTableWidget::item:selected {
     color: #1f1d1a;
 }
 
+#tableCellWidget {
+    background: transparent;
+}
+
 #tableEditButton {
-    min-height: 28px;
-    padding: 4px 12px;
-    border-radius: 10px;
+    min-height: 36px;
+    max-height: 36px;
+    min-width: 80px;
+    max-width: 80px;
+    padding: 0px;
+    margin: 0px;
+    border-radius: 8px;
     color: #615950;
     background: transparent;
     border: 1px solid transparent;
@@ -331,8 +339,8 @@ QHeaderView {
 }
 
 QHeaderView::section {
-    min-height: 40px;
-    padding: 8px 10px;
+    min-height: 46px;
+    padding: 10px 10px;
     background: #f6f3ee;
     border: 0;
     border-bottom: 1px solid #d8d0c7;

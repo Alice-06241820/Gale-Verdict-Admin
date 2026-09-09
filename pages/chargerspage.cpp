@@ -29,6 +29,19 @@ QTableWidgetItem *centerItem(const QString &text)
     return item;
 }
 
+QWidget *centerCellWidget(QWidget *child, QWidget *parent)
+{
+    auto *container = new QWidget(parent);
+    container->setObjectName("tableCellWidget");
+    auto *layout = new QHBoxLayout(container);
+    layout->setContentsMargins(4, 2, 4, 10);
+    layout->setSpacing(0);
+    layout->addStretch();
+    layout->addWidget(child, 0, Qt::AlignCenter);
+    layout->addStretch();
+    return container;
+}
+
 } // namespace
 
 ChargersPage::ChargersPage(AdminApiService *service, QWidget *parent)
@@ -86,7 +99,8 @@ ChargersPage::ChargersPage(AdminApiService *service, QWidget *parent)
     table_->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     table_->setShowGrid(false);
     table_->setAlternatingRowColors(true);
-    table_->verticalHeader()->setDefaultSectionSize(40);
+    table_->verticalHeader()->setMinimumSectionSize(60);
+    table_->verticalHeader()->setDefaultSectionSize(60);
     table_->setColumnWidth(0, 126);
     table_->setColumnWidth(1, 210);
     table_->setColumnWidth(2, 88);
@@ -94,7 +108,7 @@ ChargersPage::ChargersPage(AdminApiService *service, QWidget *parent)
     table_->setColumnWidth(4, 88);
     table_->setColumnWidth(5, 112);
     table_->setColumnWidth(6, 136);
-    table_->setColumnWidth(7, 96);
+    table_->setColumnWidth(7, 124);
     panelLayout->addWidget(table_, 1);
     layout->addWidget(panel, 1);
 
@@ -119,6 +133,7 @@ void ChargersPage::refresh()
     const QList<ChargerInfo> rows = service_->chargers();
     table_->setRowCount(rows.size());
     for (int row = 0; row < rows.size(); ++row) {
+        table_->setRowHeight(row, 60);
         const ChargerInfo &charger = rows[row];
         const QStringList values = {
             charger.id,
@@ -140,18 +155,12 @@ void ChargersPage::refresh()
 
         auto *editButton = new QPushButton("编辑", table_);
         editButton->setObjectName("tableEditButton");
+        editButton->setFixedSize(80, 36);
         editButton->setToolTip(charger.status == "在用" ? "电桩正在使用中，后端当前禁止修改参数" : "编辑本行电桩参数");
-        connect(editButton, &QPushButton::clicked, this, [this, editButton]() {
-            int targetRow = -1;
-            for (int i = 0; i < table_->rowCount(); ++i) {
-                if (table_->cellWidget(i, 7) == editButton) {
-                    targetRow = i;
-                    break;
-                }
-            }
-            openChargerEditor(targetRow);
+        connect(editButton, &QPushButton::clicked, this, [this, row]() {
+            openChargerEditor(row);
         });
-        table_->setCellWidget(row, 7, editButton);
+        table_->setCellWidget(row, 7, centerCellWidget(editButton, table_));
     }
     messageLabel_->setText(QString("共 %1 个电桩").arg(rows.size()));
     if (!rows.isEmpty() && (table_->currentRow() < 0 || table_->currentRow() >= rows.size())) {

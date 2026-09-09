@@ -35,6 +35,19 @@ QTableWidgetItem *centerItem(const QString &text)
     return item;
 }
 
+QWidget *centerCellWidget(QWidget *child, QWidget *parent)
+{
+    auto *container = new QWidget(parent);
+    container->setObjectName("tableCellWidget");
+    auto *layout = new QHBoxLayout(container);
+    layout->setContentsMargins(4, 2, 4, 10);
+    layout->setSpacing(0);
+    layout->addStretch();
+    layout->addWidget(child, 0, Qt::AlignCenter);
+    layout->addStretch();
+    return container;
+}
+
 } // namespace
 
 StationsPage::StationsPage(AdminApiService *service, QWidget *parent)
@@ -83,7 +96,8 @@ StationsPage::StationsPage(AdminApiService *service, QWidget *parent)
     stationTable_->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     stationTable_->setShowGrid(false);
     stationTable_->setAlternatingRowColors(true);
-    stationTable_->verticalHeader()->setDefaultSectionSize(40);
+    stationTable_->verticalHeader()->setMinimumSectionSize(60);
+    stationTable_->verticalHeader()->setDefaultSectionSize(60);
     stationTable_->setColumnWidth(0, 86);
     stationTable_->setColumnWidth(1, 180);
     stationTable_->setColumnWidth(2, 240);
@@ -219,13 +233,14 @@ StationsPage::StationsPage(AdminApiService *service, QWidget *parent)
     detailTable_->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     detailTable_->setShowGrid(false);
     detailTable_->setAlternatingRowColors(true);
-    detailTable_->verticalHeader()->setDefaultSectionSize(40);
+    detailTable_->verticalHeader()->setMinimumSectionSize(60);
+    detailTable_->verticalHeader()->setDefaultSectionSize(60);
     detailTable_->setColumnWidth(0, 110);
     detailTable_->setColumnWidth(1, 72);
     detailTable_->setColumnWidth(2, 94);
     detailTable_->setColumnWidth(3, 72);
     detailTable_->setColumnWidth(4, 118);
-    detailTable_->setColumnWidth(5, 86);
+    detailTable_->setColumnWidth(5, 120);
     detailLayout->addWidget(detailTable_, 1);
 
     content->addWidget(detailPanel, 1, 1);
@@ -255,6 +270,7 @@ void StationsPage::fillStationTable()
     const QList<StationInfo> rows = service_->stations();
     stationTable_->setRowCount(rows.size());
     for (int row = 0; row < rows.size(); ++row) {
+        stationTable_->setRowHeight(row, 60);
         const StationInfo &station = rows[row];
         int online = 0;
         for (const ChargerInfo &charger : station.chargers) {
@@ -292,6 +308,7 @@ void StationsPage::fillDetailTable(int stationRow)
     const QList<ChargerInfo> chargers = stations[stationRow].chargers;
     detailTable_->setRowCount(chargers.size());
     for (int row = 0; row < chargers.size(); ++row) {
+        detailTable_->setRowHeight(row, 60);
         const ChargerInfo &charger = chargers[row];
         const QStringList values = {
             charger.id,
@@ -307,18 +324,12 @@ void StationsPage::fillDetailTable(int stationRow)
 
         auto *editButton = new QPushButton("编辑", detailTable_);
         editButton->setObjectName("tableEditButton");
+        editButton->setFixedSize(80, 36);
         editButton->setToolTip(charger.status == "在用" ? "电桩正在使用中，后端当前禁止修改参数" : "编辑本行电桩参数");
-        connect(editButton, &QPushButton::clicked, this, [this, editButton]() {
-            int targetRow = -1;
-            for (int i = 0; i < detailTable_->rowCount(); ++i) {
-                if (detailTable_->cellWidget(i, 5) == editButton) {
-                    targetRow = i;
-                    break;
-                }
-            }
-            openChargerEditor(targetRow);
+        connect(editButton, &QPushButton::clicked, this, [this, row]() {
+            openChargerEditor(row);
         });
-        detailTable_->setCellWidget(row, 5, editButton);
+        detailTable_->setCellWidget(row, 5, centerCellWidget(editButton, detailTable_));
     }
 
     if (!chargers.isEmpty() && (detailTable_->currentRow() < 0 || detailTable_->currentRow() >= chargers.size())) {
