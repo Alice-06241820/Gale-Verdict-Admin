@@ -4,6 +4,7 @@
 #include "service/adminapiservice.h"
 
 #include <QAbstractItemView>
+#include <QAction>
 #include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -15,10 +16,13 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMenu>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QSignalBlocker>
 #include <QTableWidget>
 #include <QTableWidgetItem>
+#include <QToolButton>
 #include <QVBoxLayout>
 
 namespace {
@@ -113,62 +117,77 @@ StationsPage::StationsPage(AdminApiService *service, QWidget *parent)
     auto *submitButton = new QPushButton("新增电站", formPanel);
     submitButton->setObjectName("primaryButton");
 
-    pointsEditTable_ = new QTableWidget(formPanel);
-    pointsEditTable_->setColumnCount(2);
-    pointsEditTable_->setHorizontalHeaderLabels({"类型", "功率(kW)"});
-    auto *pointsHeader = pointsEditTable_->horizontalHeader();
-    pointsHeader->setSectionResizeMode(0, QHeaderView::Stretch);
-    pointsHeader->setSectionResizeMode(1, QHeaderView::Interactive);
-    pointsHeader->setStretchLastSection(false);
-    pointsHeader->setMinimumSectionSize(72);
-    pointsHeader->setDefaultAlignment(Qt::AlignCenter);
-    pointsEditTable_->setColumnWidth(1, 100);
-    pointsEditTable_->verticalHeader()->setVisible(false);
-    pointsEditTable_->verticalHeader()->setDefaultSectionSize(28);
-    pointsEditTable_->setFrameShape(QFrame::NoFrame);
-    pointsEditTable_->setShowGrid(false);
-    pointsEditTable_->setAlternatingRowColors(true);
-    pointsEditTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
-    pointsEditTable_->setSelectionMode(QAbstractItemView::SingleSelection);
-    pointsEditTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    updatePointsTableHeight();
+    // ---- 电桩明细：单行编辑当前桩，右侧倒三角展开切换全部桩 ----
+    const QString compactStyle =
+        QStringLiteral(
+            "QComboBox, QDoubleSpinBox {"
+            "  min-height: 0px;"
+            "  max-height: 22px;"
+            "  padding: 0px 4px;"
+            "  border-radius: 6px;"
+            "  font-size: 12px;"
+            "}"
+            "QComboBox { padding-right: 18px; }"
+            "QComboBox::drop-down { width: 16px; }"
+            "QComboBox::down-arrow { width: 8px; height: 8px; }"
+            "QDoubleSpinBox { padding-right: 16px; }"
+            "QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {"
+            "  width: 14px; height: 11px;"
+            "  margin-top: 1px; margin-bottom: 1px; margin-right: 2px;"
+            "}"
+            "QDoubleSpinBox::up-arrow, QDoubleSpinBox::down-arrow {"
+            "  width: 6px; height: 6px;"
+            "}");
 
-    addPointButton_ = new QPushButton("添加电桩", formPanel);
-    removePointButton_ = new QPushButton("移除选中", formPanel);
-    auto *pointButtonsLayout = new QHBoxLayout();
-    pointButtonsLayout->setContentsMargins(0, 0, 0, 0);
-    pointButtonsLayout->addWidget(addPointButton_);
-    pointButtonsLayout->addWidget(removePointButton_);
-    pointButtonsLayout->addStretch(1);
+    pointTypeCombo_ = new QComboBox(formPanel);
+    pointTypeCombo_->setStyleSheet(compactStyle);
+    pointTypeCombo_->addItem("直流快充", "DC");
+    pointTypeCombo_->addItem("交流慢充", "AC");
 
-    auto *pointsBox = new QWidget(formPanel);
-    auto *pointsLayout = new QVBoxLayout(pointsBox);
-    pointsLayout->setContentsMargins(0, 0, 0, 0);
-    pointsLayout->setSpacing(4);
-    pointsLayout->addWidget(pointsEditTable_);
-    pointsLayout->addLayout(pointButtonsLayout);
+    pointPowerSpin_ = new QDoubleSpinBox(formPanel);
+    pointPowerSpin_->setStyleSheet(compactStyle);
+    pointPowerSpin_->setRange(0.1, 2000.0);
+    pointPowerSpin_->setDecimals(1);
+    pointPowerSpin_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    pointPowerSpin_->setValue(60.0);
 
-    addPointRow("DC", 60.0);
-    connect(addPointButton_, &QPushButton::clicked, this, [this] {
-        if (pointsEditTable_->rowCount() >= 50) {
-            return;
-        }
-        addPointRow("DC", 60.0);
-    });
-    connect(removePointButton_, &QPushButton::clicked, this, [this] {
-        if (pointsEditTable_->rowCount() <= 1) {
-            return;
-        }
-        const int row = pointsEditTable_->currentRow();
-        pointsEditTable_->removeRow(row >= 0 ? row
-                                             : pointsEditTable_->rowCount() - 1);
-        updatePointsTableHeight();
-    });
+    // 只用 arrowType 画一个倒三角，菜单用 clicked 手动弹出，
+    // 避免 QToolButton::setMenu 再叠加一个菜单指示箭头(会出现两个三角)。
+    pointExpandButton_ = new QToolButton(formPanel);
+    pointExpandButton_->setArrowType(Qt::DownArrow);
+    pointExpandButton_->setFixedSize(28, 22);
+    pointExpandButton_->setToolTip("查看/切换已添加的电桩");
+
+    pointInputs_.append(PointInput{"DC", 60.0});
+    currentPointIndex_ = 0;
+
+    auto *pointMenu = new QMenu(pointExpandButton_);
+    connect(pointMenu, &QMenu::aboutToShow, this,
+            [this, pointMenu] { rebuildPointMenu(pointMenu); });
+    connect(pointExpandButton_, &QToolButton::clicked, this,
+            [this, pointMenu] {
+                // 锚定在按钮正下方（按钮自己 mapToGlobal），
+                // 不要用整页的 mapToGlobal，否则菜单会弹到错误位置。
+                pointMenu->popup(pointExpandButton_->mapToGlobal(
+                    QPoint(0, pointExpandButton_->height() + 2)));
+            });
+    connect(pointTypeCombo_,
+            QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [this] { syncEditorToInput(); });
+    connect(pointPowerSpin_,
+            QOverload<double>::of(&QDoubleSpinBox::valueChanged), this,
+            [this] { syncEditorToInput(); });
+
+    auto *pointRow = new QHBoxLayout();
+    pointRow->setSpacing(6);
+    pointRow->addWidget(pointTypeCombo_, 1);
+    pointRow->addWidget(pointPowerSpin_, 1);
+    pointRow->addWidget(pointExpandButton_);
 
     formLayout->addRow("站名", nameEdit_);
     formLayout->addRow("纬度", latSpin_);
     formLayout->addRow("经度", lngSpin_);
-    formLayout->addRow("电桩明细", pointsBox);
+    formLayout->addRow("电桩明细", pointRow);
     formLayout->addRow(submitButton);
     content->addWidget(formPanel, 0, 1);
 
@@ -307,81 +326,103 @@ void StationsPage::fillDetailTable(int stationRow)
     }
 }
 
-void StationsPage::addPointRow(const QString &type, double powerKw)
+void StationsPage::syncEditorToInput()
 {
-    const int row = pointsEditTable_->rowCount();
-    pointsEditTable_->insertRow(row);
-
-    // 覆盖全局 QSS 里的大尺寸输入控件样式(全局 min-height 38 + padding 7px
-    // 实际约 54px 高, 放不进小行), 仅对本表内的下拉/功率输入生效.
-    const QString compactStyle =
-        QStringLiteral(
-            "QComboBox, QDoubleSpinBox {"
-            "  min-height: 0px;"
-            "  max-height: 22px;"
-            "  padding: 0px 4px;"
-            "  border-radius: 6px;"
-            "  font-size: 12px;"
-            "}"
-            "QComboBox { padding-right: 18px; }"
-            "QComboBox::drop-down { width: 16px; }"
-            "QComboBox::down-arrow { width: 8px; height: 8px; }"
-            "QDoubleSpinBox { padding-right: 16px; }"
-            "QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {"
-            "  width: 14px; height: 11px;"
-            "  margin-top: 1px; margin-bottom: 1px; margin-right: 2px;"
-            "}"
-            "QDoubleSpinBox::up-arrow, QDoubleSpinBox::down-arrow {"
-            "  width: 6px; height: 6px;"
-            "}");
-
-    auto *typeBox = new QComboBox(pointsEditTable_);
-    typeBox->setStyleSheet(compactStyle);
-    typeBox->addItem("直流快充", "DC");
-    typeBox->addItem("交流慢充", "AC");
-    const int typeIndex = typeBox->findData(type);
-    typeBox->setCurrentIndex(typeIndex >= 0 ? typeIndex : 0);
-    pointsEditTable_->setCellWidget(row, 0, typeBox);
-
-    auto *powerSpin = new QDoubleSpinBox(pointsEditTable_);
-    powerSpin->setStyleSheet(compactStyle);
-    powerSpin->setRange(0.1, 2000.0);
-    powerSpin->setDecimals(1);
-    powerSpin->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    powerSpin->setValue(powerKw);
-    pointsEditTable_->setCellWidget(row, 1, powerSpin);
-
-    updatePointsTableHeight();
+    if (currentPointIndex_ < 0 ||
+        currentPointIndex_ >= pointInputs_.size()) {
+        return;
+    }
+    PointInput &input = pointInputs_[currentPointIndex_];
+    input.type = pointTypeCombo_->currentData().toString();
+    input.powerKw = pointPowerSpin_->value();
 }
 
-void StationsPage::updatePointsTableHeight()
+void StationsPage::applyInputToEditor(int index)
 {
-    constexpr int kMaxVisibleRows = 4;
-    const int rows = pointsEditTable_->rowCount();
-    const int visibleRows = qMin(rows, kMaxVisibleRows);
-    const int headerHeight =
-        pointsEditTable_->horizontalHeader()->sizeHint().height();
-    const int rowHeight =
-        pointsEditTable_->verticalHeader()->defaultSectionSize();
-    pointsEditTable_->setFixedHeight(headerHeight + visibleRows * rowHeight + 4);
+    if (index < 0 || index >= pointInputs_.size()) {
+        return;
+    }
+    const PointInput &input = pointInputs_.at(index);
+    {
+        const QSignalBlocker typeBlocker(pointTypeCombo_);
+        pointTypeCombo_->setCurrentIndex(
+            pointTypeCombo_->findData(input.type));
+    }
+    {
+        const QSignalBlocker powerBlocker(pointPowerSpin_);
+        pointPowerSpin_->setValue(input.powerKw);
+    }
+}
+
+void StationsPage::selectPointInput(int index)
+{
+    if (index < 0 || index >= pointInputs_.size() ||
+        index == currentPointIndex_) {
+        return;
+    }
+    syncEditorToInput();
+    currentPointIndex_ = index;
+    applyInputToEditor(index);
+}
+
+void StationsPage::addPointInput()
+{
+    syncEditorToInput();
+    pointInputs_.append(PointInput{"DC", 60.0});
+    currentPointIndex_ = pointInputs_.size() - 1;
+    applyInputToEditor(currentPointIndex_);
+}
+
+void StationsPage::removePointInput(int index)
+{
+    if (index < 0 || index >= pointInputs_.size() ||
+        pointInputs_.size() <= 1) {
+        return;
+    }
+    pointInputs_.removeAt(index);
+    if (index < currentPointIndex_) {
+        --currentPointIndex_;
+    } else if (index == currentPointIndex_) {
+        currentPointIndex_ = qMin(index, pointInputs_.size() - 1);
+    }
+    applyInputToEditor(currentPointIndex_);
+}
+
+void StationsPage::rebuildPointMenu(QMenu *menu)
+{
+    syncEditorToInput();
+    menu->clear();
+    for (int i = 0; i < pointInputs_.size(); ++i) {
+        const PointInput &input = pointInputs_.at(i);
+        const QString typeText =
+            input.type == "DC" ? QString::fromUtf8("直流快充")
+                               : QString::fromUtf8("交流慢充");
+        QAction *action = menu->addAction(
+            QString::fromUtf8("电桩 %1 · %2 · %3 kW")
+                .arg(i + 1)
+                .arg(typeText)
+                .arg(input.powerKw, 0, 'f', 1));
+        action->setCheckable(true);
+        action->setChecked(i == currentPointIndex_);
+        connect(action, &QAction::triggered, this,
+                [this, i] { selectPointInput(i); });
+    }
+    menu->addSeparator();
+    QAction *addAction =
+        menu->addAction(QString::fromUtf8("＋ 添加新电桩"));
+    connect(addAction, &QAction::triggered, this,
+            [this] { addPointInput(); });
+    QAction *removeAction =
+        menu->addAction(QString::fromUtf8("删除当前电桩"));
+    removeAction->setEnabled(pointInputs_.size() > 1);
+    connect(removeAction, &QAction::triggered, this,
+            [this] { removePointInput(currentPointIndex_); });
 }
 
 void StationsPage::submitStation()
 {
-    QList<PointInput> points;
-    const int rows = pointsEditTable_->rowCount();
-    for (int row = 0; row < rows; ++row) {
-        PointInput input;
-        if (auto *typeBox = qobject_cast<QComboBox *>(
-                pointsEditTable_->cellWidget(row, 0))) {
-            input.type = typeBox->currentData().toString();
-        }
-        if (auto *powerSpin = qobject_cast<QDoubleSpinBox *>(
-                pointsEditTable_->cellWidget(row, 1))) {
-            input.powerKw = powerSpin->value();
-        }
-        points.append(input);
-    }
+    syncEditorToInput();
+    QList<PointInput> points = pointInputs_;
 
     QString message;
     const bool ok = service_->addStation(nameEdit_->text(),
@@ -392,8 +433,10 @@ void StationsPage::submitStation()
     QMessageBox::information(this, ok ? "新增成功" : "新增失败", message);
     if (ok) {
         nameEdit_->clear();
-        pointsEditTable_->setRowCount(0);
-        addPointRow("DC", 60.0);
+        pointInputs_.clear();
+        pointInputs_.append(PointInput{"DC", 60.0});
+        currentPointIndex_ = 0;
+        applyInputToEditor(0);
         refresh();
     }
 }
