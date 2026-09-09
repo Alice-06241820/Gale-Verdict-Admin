@@ -289,7 +289,42 @@ QTableWidget::item {
 QTableWidget::item:selected {
     background: #f4d952;
     color: #1f1d1a;
-}//..
+}
+
+#tableEditButton {
+    min-height: 28px;
+    padding: 4px 12px;
+    border-radius: 10px;
+    color: #615950;
+    background: transparent;
+    border: 1px solid transparent;
+}
+
+#tableEditButton:hover {
+    color: #fffaf4;
+    background: #d84b35;
+    border: 1px solid #d84b35;
+}
+
+#tableEditButton:pressed {
+    color: #fffaf4;
+    background: #a63325;
+    border: 1px solid #a63325;
+}
+
+#chargerEditDialog {
+    background: #fbfaf7;
+}
+
+#dialogTitle {
+    font-size: 20px;
+    font-weight: 700;
+    color: #171511;
+}
+
+#dialogSubtitle {
+    color: #827970;
+}
 
 QHeaderView {
     background: transparent;

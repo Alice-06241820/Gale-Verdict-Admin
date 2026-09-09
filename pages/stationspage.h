@@ -24,6 +24,7 @@ private:
     void fillDetailTable(int stationRow);
     void submitStation();
     void addPointRow(const QString &type, double powerKw);
+    void openChargerEditor(int row);
 
     AdminApiService *service_ = nullptr;
     QTableWidget *stationTable_ = nullptr;

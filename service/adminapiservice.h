@@ -23,6 +23,10 @@ public:
 
     QList<ChargerInfo> chargers() const;
     bool restartCharger(const QString &chargerId, QString *message = nullptr);
+    bool updateChargerAttributes(const QString &chargerId,
+                                  const QString &typeText,
+                                  double powerKw,
+                                  QString *message = nullptr);
 
     QList<StationInfo> stations() const;
     bool addStation(const QString &name,
@@ -42,6 +46,10 @@ private:
                            const QJsonObject &body,
                            bool *ok,
                            QString *errorMessage = nullptr) const;
+    QJsonDocument patchJson(const QString &path,
+                            const QJsonObject &body,
+                            bool *ok,
+                            QString *errorMessage = nullptr) const;
     QJsonDocument sendJson(const QString &method,
                            const QString &path,
                            const QJsonObject *body,
@@ -51,6 +59,7 @@ private:
     QList<StationInfo> backendStations(bool *ok = nullptr) const;
     QString statusToText(const QString &status) const;
     QString pointTypeToText(const QString &type) const;
+    QString pointTypeToApi(const QString &typeText) const;
     QString userStatusToText(const QString &status) const;
 
     QString baseUrl_ = "http://127.0.0.1:5555";

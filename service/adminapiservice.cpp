@@ -14,7 +14,21 @@ namespace {
 QString jsonErrorMessage(const QJsonDocument &doc, const QString &fallback)
 {
     if (doc.isObject()) {
-        const QString message = doc.object().value("message").toString();
+        const QJsonObject object = doc.object();
+        const QString code = object.value("code").toString();
+        if (code == "point_working") {
+            return "电桩正在使用中，后端当前禁止修改类型和功率";
+        }
+        if (code == "unauthorized") {
+            return "登录已失效，请重新登录管理员账号";
+        }
+        if (code == "forbidden") {
+            return "当前账号不是管理员，后端拒绝了本次操作";
+        }
+        if (code == "not_found") {
+            return "后端没有找到这个电桩，请刷新列表后重试";
+        }
+        const QString message = object.value("message").toString();
         if (!message.isEmpty()) {
             return message;
         }
@@ -200,6 +214,73 @@ bool AdminApiService::restartCharger(const QString &chargerId, QString *message)
     return false;
 }
 
+bool AdminApiService::updateChargerAttributes(const QString &chargerId,
+                                              const QString &typeText,
+                                              double powerKw,
+                                              QString *message)
+{
+    const QString trimmedId = chargerId.trimmed();
+    const QString apiType = pointTypeToApi(typeText);
+    if (trimmedId.isEmpty()) {
+        if (message) {
+            *message = "请先选择需要修改的电桩";
+        }
+        return false;
+    }
+    if (apiType.isEmpty()) {
+        if (message) {
+            *message = "电桩类型必须是快充或慢充";
+        }
+        return false;
+    }
+    if (powerKw <= 0.0) {
+        if (message) {
+            *message = "功率必须大于 0";
+        }
+        return false;
+    }
+
+    if (!token_.isEmpty()) {
+        QJsonObject body;
+        body["type"] = apiType;
+        body["power_kw"] = powerKw;
+
+        bool ok = false;
+        patchJson(QString("/api/charging-points/%1").arg(trimmedId), body, &ok, message);
+        if (ok) {
+            if (message) {
+                *message = "电桩参数已保存";
+            }
+            return true;
+        }
+        return false;
+    }
+
+    for (StationInfo &station : stations_) {
+        for (ChargerInfo &charger : station.chargers) {
+            if (charger.id == trimmedId) {
+                if (charger.status == "在用") {
+                    if (message) {
+                        *message = "电桩正在使用中，暂不能修改类型和功率";
+                    }
+                    return false;
+                }
+                charger.type = pointTypeToText(apiType);
+                charger.powerKw = powerKw;
+                if (message) {
+                    *message = "电桩参数已保存";
+                }
+                return true;
+            }
+        }
+    }
+
+    if (message) {
+        *message = "未找到目标电桩";
+    }
+    return false;
+}
+
 QList<StationInfo> AdminApiService::stations() const
 {
     bool ok = false;
@@ -336,7 +417,8 @@ QList<UserInfo> AdminApiService::users(const QString &phoneKeyword) const
                 user.phone = row.value("phone").toString();
                 user.nickname = row.value("username").toString();
                 user.balance = row.value("balance").toDouble();
-                user.registeredAt = QDateTime::fromSecsSinceEpoch(row.value("created_at").toInteger());
+                user.registeredAt = QDateTime::fromSecsSinceEpoch(
+                    static_cast<qint64>(row.value("created_at").toDouble()));
                 user.status = userStatusToText(row.value("status").toString());
                 result.append(user);
             }
@@ -476,6 +558,14 @@ QJsonDocument AdminApiService::postJson(const QString &path,
     return sendJson("POST", path, &body, ok, errorMessage);
 }
 
+QJsonDocument AdminApiService::patchJson(const QString &path,
+                                         const QJsonObject &body,
+                                         bool *ok,
+                                         QString *errorMessage) const
+{
+    return sendJson("PATCH", path, &body, ok, errorMessage);
+}
+
 QJsonDocument AdminApiService::sendJson(const QString &method,
                                         const QString &path,
                                         const QJsonObject *body,
@@ -498,9 +588,12 @@ QJsonDocument AdminApiService::sendJson(const QString &method,
     QNetworkReply *reply = nullptr;
     if (method == "GET") {
         reply = network_.get(request);
-    } else {
+    } else if (method == "POST") {
         const QByteArray payload = body ? QJsonDocument(*body).toJson(QJsonDocument::Compact) : QByteArray("{}");
         reply = network_.post(request, payload);
+    } else {
+        const QByteArray payload = body ? QJsonDocument(*body).toJson(QJsonDocument::Compact) : QByteArray("{}");
+        reply = network_.sendCustomRequest(request, method.toUtf8(), payload);
     }
 
     QEventLoop loop;
@@ -647,8 +740,8 @@ QList<StationInfo> AdminApiService::backendStations(bool *ok) const
                     charger.id = QString::number(pointJson.value("id").toInt());
                     charger.stationId = station.id;
                     charger.stationName = station.name;
-                    charger.type = "后端未返回";
-                    charger.powerKw = 0.0;
+                    charger.type = pointTypeToText(pointJson.value("type").toString());
+                    charger.powerKw = pointJson.value("power_kw").toDouble();
                     charger.status = statusToText(pointJson.value("status").toString());
                     charger.totalSessions = 0;
                     charger.totalHours = 0.0;
@@ -685,6 +778,17 @@ QString AdminApiService::pointTypeToText(const QString &type) const
         return "慢充";
     }
     return type.isEmpty() ? "未知" : type;
+}
+
+QString AdminApiService::pointTypeToApi(const QString &typeText) const
+{
+    if (typeText == "快充" || typeText == "DC") {
+        return "DC";
+    }
+    if (typeText == "慢充" || typeText == "AC") {
+        return "AC";
+    }
+    return QString();
 }
 
 QString AdminApiService::userStatusToText(const QString &status) const

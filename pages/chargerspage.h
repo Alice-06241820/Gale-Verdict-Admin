@@ -20,6 +20,7 @@ public slots:
 
 private:
     QString selectedChargerId() const;
+    void openChargerEditor(int row);
 
     AdminApiService *service_ = nullptr;
     QTableWidget *table_ = nullptr;
