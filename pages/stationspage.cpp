@@ -124,7 +124,7 @@ StationsPage::StationsPage(AdminApiService *service, QWidget *parent)
     pointsHeader->setDefaultAlignment(Qt::AlignCenter);
     pointsEditTable_->setColumnWidth(1, 100);
     pointsEditTable_->verticalHeader()->setVisible(false);
-    pointsEditTable_->verticalHeader()->setDefaultSectionSize(30);
+    pointsEditTable_->verticalHeader()->setDefaultSectionSize(28);
     pointsEditTable_->setFrameShape(QFrame::NoFrame);
     pointsEditTable_->setShowGrid(false);
     pointsEditTable_->setAlternatingRowColors(true);
@@ -312,7 +312,31 @@ void StationsPage::addPointRow(const QString &type, double powerKw)
     const int row = pointsEditTable_->rowCount();
     pointsEditTable_->insertRow(row);
 
+    // 覆盖全局 QSS 里的大尺寸输入控件样式(全局 min-height 38 + padding 7px
+    // 实际约 54px 高, 放不进小行), 仅对本表内的下拉/功率输入生效.
+    const QString compactStyle =
+        QStringLiteral(
+            "QComboBox, QDoubleSpinBox {"
+            "  min-height: 0px;"
+            "  max-height: 22px;"
+            "  padding: 0px 4px;"
+            "  border-radius: 6px;"
+            "  font-size: 12px;"
+            "}"
+            "QComboBox { padding-right: 18px; }"
+            "QComboBox::drop-down { width: 16px; }"
+            "QComboBox::down-arrow { width: 8px; height: 8px; }"
+            "QDoubleSpinBox { padding-right: 16px; }"
+            "QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {"
+            "  width: 14px; height: 11px;"
+            "  margin-top: 1px; margin-bottom: 1px; margin-right: 2px;"
+            "}"
+            "QDoubleSpinBox::up-arrow, QDoubleSpinBox::down-arrow {"
+            "  width: 6px; height: 6px;"
+            "}");
+
     auto *typeBox = new QComboBox(pointsEditTable_);
+    typeBox->setStyleSheet(compactStyle);
     typeBox->addItem("直流快充", "DC");
     typeBox->addItem("交流慢充", "AC");
     const int typeIndex = typeBox->findData(type);
@@ -320,6 +344,7 @@ void StationsPage::addPointRow(const QString &type, double powerKw)
     pointsEditTable_->setCellWidget(row, 0, typeBox);
 
     auto *powerSpin = new QDoubleSpinBox(pointsEditTable_);
+    powerSpin->setStyleSheet(compactStyle);
     powerSpin->setRange(0.1, 2000.0);
     powerSpin->setDecimals(1);
     powerSpin->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
@@ -331,7 +356,7 @@ void StationsPage::addPointRow(const QString &type, double powerKw)
 
 void StationsPage::updatePointsTableHeight()
 {
-    constexpr int kMaxVisibleRows = 5;
+    constexpr int kMaxVisibleRows = 4;
     const int rows = pointsEditTable_->rowCount();
     const int visibleRows = qMin(rows, kMaxVisibleRows);
     const int headerHeight =
