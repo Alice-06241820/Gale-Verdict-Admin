@@ -93,8 +93,8 @@ StationsPage::StationsPage(AdminApiService *service, QWidget *parent)
     auto *formPanel = new QWidget(this);
     formPanel->setObjectName("sectionPanel");
     auto *formLayout = new QFormLayout(formPanel);
-    formLayout->setContentsMargins(18, 16, 18, 18);
-    formLayout->setSpacing(10);
+    formLayout->setContentsMargins(16, 12, 16, 12);
+    formLayout->setSpacing(8);
 
     auto *formTitle = new QLabel("新增充电站", formPanel);
     formTitle->setObjectName("sectionTitle");
@@ -116,16 +116,22 @@ StationsPage::StationsPage(AdminApiService *service, QWidget *parent)
     pointsEditTable_ = new QTableWidget(formPanel);
     pointsEditTable_->setColumnCount(2);
     pointsEditTable_->setHorizontalHeaderLabels({"类型", "功率(kW)"});
-    pointsEditTable_->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    auto *pointsHeader = pointsEditTable_->horizontalHeader();
+    pointsHeader->setSectionResizeMode(0, QHeaderView::Stretch);
+    pointsHeader->setSectionResizeMode(1, QHeaderView::Interactive);
+    pointsHeader->setStretchLastSection(false);
+    pointsHeader->setMinimumSectionSize(72);
+    pointsHeader->setDefaultAlignment(Qt::AlignCenter);
+    pointsEditTable_->setColumnWidth(1, 100);
     pointsEditTable_->verticalHeader()->setVisible(false);
-    pointsEditTable_->verticalHeader()->setDefaultSectionSize(36);
+    pointsEditTable_->verticalHeader()->setDefaultSectionSize(30);
     pointsEditTable_->setFrameShape(QFrame::NoFrame);
     pointsEditTable_->setShowGrid(false);
     pointsEditTable_->setAlternatingRowColors(true);
     pointsEditTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
     pointsEditTable_->setSelectionMode(QAbstractItemView::SingleSelection);
     pointsEditTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    pointsEditTable_->setFixedHeight(122);
+    updatePointsTableHeight();
 
     addPointButton_ = new QPushButton("添加电桩", formPanel);
     removePointButton_ = new QPushButton("移除选中", formPanel);
@@ -138,7 +144,7 @@ StationsPage::StationsPage(AdminApiService *service, QWidget *parent)
     auto *pointsBox = new QWidget(formPanel);
     auto *pointsLayout = new QVBoxLayout(pointsBox);
     pointsLayout->setContentsMargins(0, 0, 0, 0);
-    pointsLayout->setSpacing(8);
+    pointsLayout->setSpacing(4);
     pointsLayout->addWidget(pointsEditTable_);
     pointsLayout->addLayout(pointButtonsLayout);
 
@@ -156,6 +162,7 @@ StationsPage::StationsPage(AdminApiService *service, QWidget *parent)
         const int row = pointsEditTable_->currentRow();
         pointsEditTable_->removeRow(row >= 0 ? row
                                              : pointsEditTable_->rowCount() - 1);
+        updatePointsTableHeight();
     });
 
     formLayout->addRow("站名", nameEdit_);
@@ -306,8 +313,8 @@ void StationsPage::addPointRow(const QString &type, double powerKw)
     pointsEditTable_->insertRow(row);
 
     auto *typeBox = new QComboBox(pointsEditTable_);
-    typeBox->addItem("直流快充 (DC)", "DC");
-    typeBox->addItem("交流慢充 (AC)", "AC");
+    typeBox->addItem("直流快充", "DC");
+    typeBox->addItem("交流慢充", "AC");
     const int typeIndex = typeBox->findData(type);
     typeBox->setCurrentIndex(typeIndex >= 0 ? typeIndex : 0);
     pointsEditTable_->setCellWidget(row, 0, typeBox);
@@ -315,9 +322,23 @@ void StationsPage::addPointRow(const QString &type, double powerKw)
     auto *powerSpin = new QDoubleSpinBox(pointsEditTable_);
     powerSpin->setRange(0.1, 2000.0);
     powerSpin->setDecimals(1);
-    powerSpin->setSuffix(" kW");
+    powerSpin->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     powerSpin->setValue(powerKw);
     pointsEditTable_->setCellWidget(row, 1, powerSpin);
+
+    updatePointsTableHeight();
+}
+
+void StationsPage::updatePointsTableHeight()
+{
+    constexpr int kMaxVisibleRows = 5;
+    const int rows = pointsEditTable_->rowCount();
+    const int visibleRows = qMin(rows, kMaxVisibleRows);
+    const int headerHeight =
+        pointsEditTable_->horizontalHeader()->sizeHint().height();
+    const int rowHeight =
+        pointsEditTable_->verticalHeader()->defaultSectionSize();
+    pointsEditTable_->setFixedHeight(headerHeight + visibleRows * rowHeight + 4);
 }
 
 void StationsPage::submitStation()
