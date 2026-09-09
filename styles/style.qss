@@ -410,3 +410,32 @@ QChartView {
     background: transparent;
     border: 0;
 }
+/* ---- 弹出菜单（电桩明细切换等）：浅色底，避免深色系统主题下文字不可见 ---- */
+QMenu {
+    background-color: #fbfaf7;
+    color: #1f1d1a;
+    border: 1px solid #d8d0c7;
+    padding: 6px;
+}
+QMenu::item {
+    padding: 6px 22px 6px 12px;
+    border-radius: 6px;
+    background: transparent;
+    color: #1f1d1a;
+}
+QMenu::item:selected {
+    background: #d84b35;
+    color: #fffaf4;
+}
+QMenu::item:disabled {
+    color: #b3aca2;
+}
+QMenu::separator {
+    height: 1px;
+    background: #e7e0d7;
+    margin: 4px 10px;
+}
+QMenu::indicator {
+    width: 14px;
+    height: 14px;
+}
