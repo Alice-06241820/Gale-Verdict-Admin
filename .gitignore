@@ -21,4 +21,8 @@ moc_predefs.h
 # 构建目录
 build*/
 debug/
+<<<<<<< Updated upstream
 release/
+=======
+release/
+>>>>>>> Stashed changes
