@@ -42,6 +42,13 @@ struct ChargerInfo
     int stationId = 0;
 };
 
+// 新增充电站时单个电桩的输入项，与后端 register 接口的 points 元素对应。
+struct PointInput
+{
+    QString type = "DC";    // "DC"(直流快充) 或 "AC"(交流慢充)
+    double powerKw = 60.0;  // 额定功率(kW)
+};
+
 struct StationInfo
 {
     int id = 0;

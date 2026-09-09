@@ -1,6 +1,6 @@
 * {
     font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
-    font-size: 14px;
+    font-size: 15px;
     color: #1f1d1a;
 }
 
@@ -23,7 +23,7 @@ QMainWindow,
 }
 
 #loginTitle {
-    font-size: 28px;
+    font-size: 30px;
     font-weight: 700;
     color: #151411;
 }
@@ -37,13 +37,13 @@ QMainWindow,
 }
 
 #pageTitle {
-    font-size: 28px;
+    font-size: 30px;
     font-weight: 700;
     color: #171511;
 }
 
 #sectionTitle {
-    font-size: 16px;
+    font-size: 17px;
     font-weight: 700;
     color: #171511;
 }
@@ -55,7 +55,7 @@ QMainWindow,
 
 #brandTitle {
     color: #151411;
-    font-size: 21px;
+    font-size: 22px;
     font-weight: 700;
 }
 
@@ -190,7 +190,7 @@ QDoubleSpinBox::down-arrow {
 }
 
 QPushButton {
-    min-height: 38px;
+    min-height: 40px;
     padding: 7px 16px;
     border-radius: 14px;
     background: #e8e2da;
@@ -283,21 +283,64 @@ QTableWidget {
 
 QTableWidget::item {
     border: 0;
-    padding: 8px 10px;
+    padding: 10px 10px;
 }
 
 QTableWidget::item:selected {
     background: #f4d952;
     color: #1f1d1a;
-}//..
+}
+
+#tableCellWidget {
+    background: transparent;
+}
+
+#tableEditButton {
+    min-height: 36px;
+    max-height: 36px;
+    min-width: 80px;
+    max-width: 80px;
+    padding: 0px;
+    margin: 0px;
+    border-radius: 8px;
+    color: #615950;
+    background: transparent;
+    border: 1px solid transparent;
+}
+
+#tableEditButton:hover {
+    color: #fffaf4;
+    background: #d84b35;
+    border: 1px solid #d84b35;
+}
+
+#tableEditButton:pressed {
+    color: #fffaf4;
+    background: #a63325;
+    border: 1px solid #a63325;
+}
+
+#chargerEditDialog {
+    background: #fbfaf7;
+}
+
+#dialogTitle {
+    font-size: 20px;
+    font-weight: 700;
+    color: #171511;
+}
+
+#dialogSubtitle {
+    color: #827970;
+}
 
 QHeaderView {
     background: transparent;
 }
 
 QHeaderView::section {
-    min-height: 40px;
-    padding: 8px 10px;
+    min-height: 46px;
+    padding: 10px 10px;
     background: #f6f3ee;
     border: 0;
     border-bottom: 1px solid #d8d0c7;
@@ -374,4 +417,33 @@ QToolTip {
 QChartView {
     background: transparent;
     border: 0;
+}
+/* ---- 弹出菜单（电桩明细切换等）：浅色底，避免深色系统主题下文字不可见 ---- */
+QMenu {
+    background-color: #fbfaf7;
+    color: #1f1d1a;
+    border: 1px solid #d8d0c7;
+    padding: 6px;
+}
+QMenu::item {
+    padding: 6px 22px 6px 12px;
+    border-radius: 6px;
+    background: transparent;
+    color: #1f1d1a;
+}
+QMenu::item:selected {
+    background: #d84b35;
+    color: #fffaf4;
+}
+QMenu::item:disabled {
+    color: #b3aca2;
+}
+QMenu::separator {
+    height: 1px;
+    background: #e7e0d7;
+    margin: 4px 10px;
+}
+QMenu::indicator {
+    width: 14px;
+    height: 14px;
 }

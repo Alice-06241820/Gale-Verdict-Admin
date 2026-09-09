@@ -1,0 +1,28 @@
+# Qt Creator / IDE
+*.pro.user
+*.pro.user.*
+.qtcreator/
+
+# qmake / 构建产物
+.qmake.stash
+Makefile
+Makefile.*
+*.o
+*.obj
+*.a
+*.lib
+*.dll
+*.exe
+moc_*.cpp
+qrc_*.cpp
+ui_*.h
+moc_predefs.h
+
+# 构建目录
+build*/
+debug/
+<<<<<<< Updated upstream
+release/
+=======
+release/
+>>>>>>> Stashed changes

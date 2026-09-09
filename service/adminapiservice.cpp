@@ -14,7 +14,21 @@ namespace {
 QString jsonErrorMessage(const QJsonDocument &doc, const QString &fallback)
 {
     if (doc.isObject()) {
-        const QString message = doc.object().value("message").toString();
+        const QJsonObject object = doc.object();
+        const QString code = object.value("code").toString();
+        if (code == "point_working") {
+            return "电桩正在使用中，后端当前禁止修改类型和功率";
+        }
+        if (code == "unauthorized") {
+            return "登录已失效，请重新登录管理员账号";
+        }
+        if (code == "forbidden") {
+            return "当前账号不是管理员，后端拒绝了本次操作";
+        }
+        if (code == "not_found") {
+            return "后端没有找到这个电桩，请刷新列表后重试";
+        }
+        const QString message = object.value("message").toString();
         if (!message.isEmpty()) {
             return message;
         }
@@ -200,6 +214,73 @@ bool AdminApiService::restartCharger(const QString &chargerId, QString *message)
     return false;
 }
 
+bool AdminApiService::updateChargerAttributes(const QString &chargerId,
+                                              const QString &typeText,
+                                              double powerKw,
+                                              QString *message)
+{
+    const QString trimmedId = chargerId.trimmed();
+    const QString apiType = pointTypeToApi(typeText);
+    if (trimmedId.isEmpty()) {
+        if (message) {
+            *message = "请先选择需要修改的电桩";
+        }
+        return false;
+    }
+    if (apiType.isEmpty()) {
+        if (message) {
+            *message = "电桩类型必须是快充或慢充";
+        }
+        return false;
+    }
+    if (powerKw <= 0.0) {
+        if (message) {
+            *message = "功率必须大于 0";
+        }
+        return false;
+    }
+
+    if (!token_.isEmpty()) {
+        QJsonObject body;
+        body["type"] = apiType;
+        body["power_kw"] = powerKw;
+
+        bool ok = false;
+        patchJson(QString("/api/charging-points/%1").arg(trimmedId), body, &ok, message);
+        if (ok) {
+            if (message) {
+                *message = "电桩参数已保存";
+            }
+            return true;
+        }
+        return false;
+    }
+
+    for (StationInfo &station : stations_) {
+        for (ChargerInfo &charger : station.chargers) {
+            if (charger.id == trimmedId) {
+                if (charger.status == "在用") {
+                    if (message) {
+                        *message = "电桩正在使用中，暂不能修改类型和功率";
+                    }
+                    return false;
+                }
+                charger.type = pointTypeToText(apiType);
+                charger.powerKw = powerKw;
+                if (message) {
+                    *message = "电桩参数已保存";
+                }
+                return true;
+            }
+        }
+    }
+
+    if (message) {
+        *message = "未找到目标电桩";
+    }
+    return false;
+}
+
 QList<StationInfo> AdminApiService::stations() const
 {
     bool ok = false;
@@ -211,17 +292,15 @@ QList<StationInfo> AdminApiService::stations() const
 }
 
 bool AdminApiService::addStation(const QString &name,
-                                 const QString &address,
                                  double latitude,
                                  double longitude,
-                                 int chargerCount,
+                                 const QList<PointInput> &points,
                                  QString *message)
 {
     const QString trimmedName = name.trimmed();
-    const QString trimmedAddress = address.trimmed();
-    if (trimmedName.isEmpty() || trimmedAddress.isEmpty()) {
+    if (trimmedName.isEmpty()) {
         if (message) {
-            *message = "站名和地址不能为空";
+            *message = "站名不能为空";
         }
         return false;
     }
@@ -231,24 +310,46 @@ bool AdminApiService::addStation(const QString &name,
         }
         return false;
     }
-    if (chargerCount <= 0 || chargerCount > 50) {
+    if (points.isEmpty() || points.size() > 50) {
         if (message) {
-            *message = "电桩数量需在 1 到 50 之间";
+            *message = "请至少添加 1 个电桩（最多 50 个）";
         }
         return false;
+    }
+    for (const PointInput &point : points) {
+        if (point.type != "DC" && point.type != "AC") {
+            if (message) {
+                *message = "电桩类型无效（仅支持 DC 或 AC）";
+            }
+            return false;
+        }
+        if (!(point.powerKw > 0.0)) {
+            if (message) {
+                *message = "电桩功率必须大于 0";
+            }
+            return false;
+        }
+    }
+
+    QJsonArray pointsArray;
+    for (const PointInput &point : points) {
+        QJsonObject entry;
+        entry["type"] = point.type;
+        entry["power_kw"] = point.powerKw;
+        pointsArray.append(entry);
     }
 
     QJsonObject body;
     body["name"] = trimmedName;
     body["latitude"] = latitude;
     body["longitude"] = longitude;
-    body["total_points"] = chargerCount;
+    body["points"] = pointsArray;
 
     bool ok = false;
     postJson("/api/charging-stations/register", body, &ok, message);
     if (ok) {
         if (message) {
-            *message = "新增电站成功";
+            *message = QString("新增电站成功（含 %1 个电桩）").arg(points.size());
         }
         return true;
     }
@@ -269,16 +370,18 @@ bool AdminApiService::addStation(const QString &name,
     StationInfo station;
     station.id = stations_.isEmpty() ? 1 : stations_.last().id + 1;
     station.name = trimmedName;
-    station.address = trimmedAddress;
     station.latitude = latitude;
     station.longitude = longitude;
     station.price = 1.28;
-    for (int i = 1; i <= chargerCount; ++i) {
+    for (int i = 0; i < points.size(); ++i) {
+        const PointInput &input = points.at(i);
         ChargerInfo charger;
-        charger.id = QString("S%1-C%2").arg(station.id, 3, 10, QChar('0')).arg(i, 2, 10, QChar('0'));
+        charger.id = QString("S%1-C%2")
+                         .arg(station.id, 3, 10, QChar('0'))
+                         .arg(i + 1, 2, 10, QChar('0'));
         charger.stationName = station.name;
-        charger.type = i % 2 == 0 ? "快充" : "慢充";
-        charger.powerKw = i % 2 == 0 ? 120.0 : 60.0;
+        charger.type = input.type == "DC" ? "快充" : "慢充";
+        charger.powerKw = input.powerKw;
         charger.status = "空闲";
         station.chargers.append(charger);
     }
@@ -314,7 +417,8 @@ QList<UserInfo> AdminApiService::users(const QString &phoneKeyword) const
                 user.phone = row.value("phone").toString();
                 user.nickname = row.value("username").toString();
                 user.balance = row.value("balance").toDouble();
-                user.registeredAt = QDateTime::fromSecsSinceEpoch(row.value("created_at").toInteger());
+                user.registeredAt = QDateTime::fromSecsSinceEpoch(
+                    static_cast<qint64>(row.value("created_at").toDouble()));
                 user.status = userStatusToText(row.value("status").toString());
                 result.append(user);
             }
@@ -454,6 +558,14 @@ QJsonDocument AdminApiService::postJson(const QString &path,
     return sendJson("POST", path, &body, ok, errorMessage);
 }
 
+QJsonDocument AdminApiService::patchJson(const QString &path,
+                                         const QJsonObject &body,
+                                         bool *ok,
+                                         QString *errorMessage) const
+{
+    return sendJson("PATCH", path, &body, ok, errorMessage);
+}
+
 QJsonDocument AdminApiService::sendJson(const QString &method,
                                         const QString &path,
                                         const QJsonObject *body,
@@ -476,9 +588,12 @@ QJsonDocument AdminApiService::sendJson(const QString &method,
     QNetworkReply *reply = nullptr;
     if (method == "GET") {
         reply = network_.get(request);
-    } else {
+    } else if (method == "POST") {
         const QByteArray payload = body ? QJsonDocument(*body).toJson(QJsonDocument::Compact) : QByteArray("{}");
         reply = network_.post(request, payload);
+    } else {
+        const QByteArray payload = body ? QJsonDocument(*body).toJson(QJsonDocument::Compact) : QByteArray("{}");
+        reply = network_.sendCustomRequest(request, method.toUtf8(), payload);
     }
 
     QEventLoop loop;
@@ -625,8 +740,8 @@ QList<StationInfo> AdminApiService::backendStations(bool *ok) const
                     charger.id = QString::number(pointJson.value("id").toInt());
                     charger.stationId = station.id;
                     charger.stationName = station.name;
-                    charger.type = "后端未返回";
-                    charger.powerKw = 0.0;
+                    charger.type = pointTypeToText(pointJson.value("type").toString());
+                    charger.powerKw = pointJson.value("power_kw").toDouble();
                     charger.status = statusToText(pointJson.value("status").toString());
                     charger.totalSessions = 0;
                     charger.totalHours = 0.0;
@@ -663,6 +778,17 @@ QString AdminApiService::pointTypeToText(const QString &type) const
         return "慢充";
     }
     return type.isEmpty() ? "未知" : type;
+}
+
+QString AdminApiService::pointTypeToApi(const QString &typeText) const
+{
+    if (typeText == "快充" || typeText == "DC") {
+        return "DC";
+    }
+    if (typeText == "慢充" || typeText == "AC") {
+        return "AC";
+    }
+    return QString();
 }
 
 QString AdminApiService::userStatusToText(const QString &status) const

@@ -81,7 +81,8 @@ UsersPage::UsersPage(AdminApiService *service, QWidget *parent)
     table_->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     table_->setShowGrid(false);
     table_->setAlternatingRowColors(true);
-    table_->verticalHeader()->setDefaultSectionSize(40);
+    table_->verticalHeader()->setMinimumSectionSize(60);
+    table_->verticalHeader()->setDefaultSectionSize(60);
     table_->setColumnWidth(0, 90);
     table_->setColumnWidth(1, 160);
     table_->setColumnWidth(2, 150);
@@ -112,6 +113,7 @@ void UsersPage::refresh()
     const QList<UserInfo> rows = service_->users(searchEdit_->text());
     table_->setRowCount(rows.size());
     for (int row = 0; row < rows.size(); ++row) {
+        table_->setRowHeight(row, 60);
         const UserInfo &user = rows[row];
         const QStringList values = {
             QString::number(user.id),

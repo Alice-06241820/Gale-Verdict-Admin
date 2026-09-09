@@ -4,6 +4,11 @@
 #include "service/adminapiservice.h"
 
 #include <QAbstractItemView>
+#include <QComboBox>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QDoubleSpinBox>
+#include <QFormLayout>
 #include <QFrame>
 #include <QHeaderView>
 #include <QHBoxLayout>
@@ -13,6 +18,31 @@
 #include <QTableWidget>
 #include <QTableWidgetItem>
 #include <QVBoxLayout>
+
+namespace {
+
+QTableWidgetItem *centerItem(const QString &text)
+{
+    auto *item = new QTableWidgetItem(text);
+    item->setTextAlignment(Qt::AlignCenter);
+    item->setToolTip(text);
+    return item;
+}
+
+QWidget *centerCellWidget(QWidget *child, QWidget *parent)
+{
+    auto *container = new QWidget(parent);
+    container->setObjectName("tableCellWidget");
+    auto *layout = new QHBoxLayout(container);
+    layout->setContentsMargins(4, 2, 4, 10);
+    layout->setSpacing(0);
+    layout->addStretch();
+    layout->addWidget(child, 0, Qt::AlignCenter);
+    layout->addStretch();
+    return container;
+}
+
+} // namespace
 
 ChargersPage::ChargersPage(AdminApiService *service, QWidget *parent)
     : QWidget(parent)
@@ -52,8 +82,8 @@ ChargersPage::ChargersPage(AdminApiService *service, QWidget *parent)
     panelLayout->addLayout(toolbar);
 
     table_ = new QTableWidget(panel);
-    table_->setColumnCount(7);
-    table_->setHorizontalHeaderLabels({"电桩编号", "所属电站", "类型", "功率(kW)", "状态", "累计次数", "累计时长(h)"});
+    table_->setColumnCount(8);
+    table_->setHorizontalHeaderLabels({"电桩编号", "所属电站", "类型", "功率(kW)", "状态", "累计次数", "累计时长(h)", "操作"});
     auto *header = table_->horizontalHeader();
     header->setSectionResizeMode(QHeaderView::Interactive);
     header->setSectionResizeMode(1, QHeaderView::Stretch);
@@ -69,7 +99,8 @@ ChargersPage::ChargersPage(AdminApiService *service, QWidget *parent)
     table_->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     table_->setShowGrid(false);
     table_->setAlternatingRowColors(true);
-    table_->verticalHeader()->setDefaultSectionSize(40);
+    table_->verticalHeader()->setMinimumSectionSize(60);
+    table_->verticalHeader()->setDefaultSectionSize(60);
     table_->setColumnWidth(0, 126);
     table_->setColumnWidth(1, 210);
     table_->setColumnWidth(2, 88);
@@ -77,6 +108,7 @@ ChargersPage::ChargersPage(AdminApiService *service, QWidget *parent)
     table_->setColumnWidth(4, 88);
     table_->setColumnWidth(5, 112);
     table_->setColumnWidth(6, 136);
+    table_->setColumnWidth(7, 124);
     panelLayout->addWidget(table_, 1);
     layout->addWidget(panel, 1);
 
@@ -101,6 +133,7 @@ void ChargersPage::refresh()
     const QList<ChargerInfo> rows = service_->chargers();
     table_->setRowCount(rows.size());
     for (int row = 0; row < rows.size(); ++row) {
+        table_->setRowHeight(row, 60);
         const ChargerInfo &charger = rows[row];
         const QStringList values = {
             charger.id,
@@ -110,18 +143,29 @@ void ChargersPage::refresh()
             charger.status,
             QString::number(charger.totalSessions),
             QString::number(charger.totalHours, 'f', 1),
+            QString(),
         };
         for (int col = 0; col < values.size(); ++col) {
-            auto *item = new QTableWidgetItem(values[col]);
-            item->setTextAlignment(Qt::AlignCenter);
+            auto *item = centerItem(values[col]);
             if (col == 4) {
                 item->setData(Qt::UserRole, charger.status);
             }
-            item->setToolTip(values[col]);
             table_->setItem(row, col, item);
         }
+
+        auto *editButton = new QPushButton("编辑", table_);
+        editButton->setObjectName("tableEditButton");
+        editButton->setFixedSize(80, 36);
+        editButton->setToolTip(charger.status == "在用" ? "电桩正在使用中，后端当前禁止修改参数" : "编辑本行电桩参数");
+        connect(editButton, &QPushButton::clicked, this, [this, row]() {
+            openChargerEditor(row);
+        });
+        table_->setCellWidget(row, 7, centerCellWidget(editButton, table_));
     }
     messageLabel_->setText(QString("共 %1 个电桩").arg(rows.size()));
+    if (!rows.isEmpty() && (table_->currentRow() < 0 || table_->currentRow() >= rows.size())) {
+        table_->selectRow(0);
+    }
 }
 
 QString ChargersPage::selectedChargerId() const
@@ -131,4 +175,75 @@ QString ChargersPage::selectedChargerId() const
         return QString();
     }
     return table_->item(row, 0)->text();
+}
+
+void ChargersPage::openChargerEditor(int row)
+{
+    if (row < 0 || row >= table_->rowCount() || !table_->item(row, 0)) {
+        messageLabel_->setText("请先选择需要修改的电桩");
+        return;
+    }
+
+    const QString id = table_->item(row, 0)->text();
+    const QString stationName = table_->item(row, 1) ? table_->item(row, 1)->text() : QString();
+    const QString typeText = table_->item(row, 2) ? table_->item(row, 2)->text() : QString();
+    const double powerKw = table_->item(row, 3) ? table_->item(row, 3)->text().toDouble() : 60.0;
+    const QString status = table_->item(row, 4) ? table_->item(row, 4)->text() : QString();
+
+    QDialog dialog(this);
+    dialog.setObjectName("chargerEditDialog");
+    dialog.setWindowTitle("编辑电桩信息");
+    dialog.setModal(true);
+    dialog.setMinimumWidth(380);
+
+    auto *root = new QVBoxLayout(&dialog);
+    root->setContentsMargins(22, 20, 22, 20);
+    root->setSpacing(14);
+
+    auto *title = new QLabel("编辑电桩信息", &dialog);
+    title->setObjectName("dialogTitle");
+    auto *subtitle = new QLabel(QString("电桩 %1 · %2").arg(id, stationName), &dialog);
+    subtitle->setObjectName("dialogSubtitle");
+    root->addWidget(title);
+    root->addWidget(subtitle);
+
+    auto *form = new QFormLayout();
+    form->setSpacing(12);
+    auto *statusLabel = new QLabel(status, &dialog);
+    auto *typeCombo = new QComboBox(&dialog);
+    typeCombo->addItems({"快充", "慢充"});
+    const int typeIndex = typeCombo->findText(typeText);
+    typeCombo->setCurrentIndex(typeIndex >= 0 ? typeIndex : 0);
+    auto *powerSpin = new QDoubleSpinBox(&dialog);
+    powerSpin->setRange(1.0, 1000.0);
+    powerSpin->setDecimals(1);
+    powerSpin->setSuffix(" kW");
+    powerSpin->setValue(powerKw > 0.0 ? powerKw : 60.0);
+    form->addRow("当前状态", statusLabel);
+    form->addRow("充电类型", typeCombo);
+    form->addRow("额定功率", powerSpin);
+    root->addLayout(form);
+
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Cancel | QDialogButtonBox::Save, &dialog);
+    buttons->button(QDialogButtonBox::Save)->setText("保存");
+    buttons->button(QDialogButtonBox::Cancel)->setText("取消");
+    buttons->button(QDialogButtonBox::Save)->setObjectName("primaryButton");
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    root->addWidget(buttons);
+
+    if (dialog.exec() != QDialog::Accepted) {
+        return;
+    }
+
+    QString message;
+    const bool ok = service_->updateChargerAttributes(id,
+                                                      typeCombo->currentText(),
+                                                      powerSpin->value(),
+                                                      &message);
+    QMessageBox::information(this, ok ? "保存成功" : "保存失败", message);
+    refresh();
+    if (row >= 0 && row < table_->rowCount()) {
+        table_->selectRow(row);
+    }
 }
