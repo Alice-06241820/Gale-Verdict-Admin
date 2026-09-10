@@ -29,7 +29,11 @@ public:
                                   QString *message = nullptr);
 
     QList<StationInfo> stations() const;
+    QList<PlaceSuggestion> suggestPlaces(const QString &keyword,
+                                         const QString &region = QString(),
+                                         QString *message = nullptr) const;
     bool addStation(const QString &name,
+                    const QString &address,
                     double latitude,
                     double longitude,
                     const QList<PointInput> &points,

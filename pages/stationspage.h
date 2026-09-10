@@ -7,11 +7,15 @@
 
 class AdminApiService;
 class QComboBox;
+class QCompleter;
 class QDoubleSpinBox;
+class QLabel;
 class QLineEdit;
 class QMenu;
 class QPushButton;
+class QStringListModel;
 class QTableWidget;
+class QTimer;
 class QToolButton;
 
 class StationsPage : public QWidget
@@ -42,8 +46,16 @@ private:
     QTableWidget *stationTable_ = nullptr;
     QTableWidget *detailTable_ = nullptr;
     QLineEdit *nameEdit_ = nullptr;
-    QDoubleSpinBox *latSpin_ = nullptr;
-    QDoubleSpinBox *lngSpin_ = nullptr;
+    QLineEdit *cityEdit_ = nullptr;
+    QLineEdit *addressEdit_ = nullptr;
+    QLabel *addressStatusLabel_ = nullptr;
+    QTimer *suggestTimer_ = nullptr;
+    QStringListModel *suggestionModel_ = nullptr;
+    QCompleter *completer_ = nullptr;
+    QList<PlaceSuggestion> placeSuggestions_;
+    double resolvedLat_ = 0.0;
+    double resolvedLng_ = 0.0;
+    bool addressResolved_ = false;
 
     QComboBox *pointTypeCombo_ = nullptr;
     QDoubleSpinBox *pointPowerSpin_ = nullptr;

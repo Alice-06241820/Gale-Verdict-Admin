@@ -42,6 +42,15 @@ struct ChargerInfo
     int stationId = 0;
 };
 
+// 腾讯地点搜索建议：把管理员输入的地址解析成经纬度。
+struct PlaceSuggestion
+{
+    QString title;
+    QString address;
+    double latitude = 0.0;
+    double longitude = 0.0;
+};
+
 // 新增充电站时单个电桩的输入项，与后端 register 接口的 points 元素对应。
 struct PointInput
 {

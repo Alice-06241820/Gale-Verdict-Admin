@@ -447,3 +447,31 @@ QMenu::indicator {
     width: 14px;
     height: 14px;
 }
+
+/* ---- 非模态消息提示（TransientMessage）：覆盖页面底部，不阻塞操作 ---- */
+QFrame#transientToast {
+    color: #1f1d1a;
+    background-color: #fbfaf7;
+    border: 1px solid #d8d0c7;
+    border-radius: 14px;
+}
+QFrame#transientToast[messageType="warning"] {
+    border: 1px solid #d84b35;
+    background-color: #fbfaf7;
+}
+QFrame#transientToast QLabel {
+    border: 0;
+    background: transparent;
+}
+QFrame#transientToast QLabel#toastTitle {
+    color: #1f1d1a;
+    font-weight: 700;
+}
+QFrame#transientToast[messageType="warning"] QLabel#toastTitle {
+    color: #d84b35;
+}
+QFrame#transientToast QPushButton {
+    min-height: 0px;
+    padding: 4px 14px;
+    border-radius: 10px;
+}

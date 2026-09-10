@@ -2,6 +2,7 @@
 
 #include "model/adminmodels.h"
 #include "service/adminapiservice.h"
+#include "ui/transientmessage.h"
 
 #include <QAbstractItemView>
 #include <QFrame>
@@ -9,7 +10,6 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
-#include <QMessageBox>
 #include <QPushButton>
 #include <QTableWidget>
 #include <QTableWidgetItem>
@@ -152,6 +152,6 @@ void UsersPage::setSelectedFrozen(bool frozen)
 
     QString message;
     const bool ok = service_->setUserFrozen(userId, frozen, &message);
-    QMessageBox::information(this, ok ? "操作成功" : "操作失败", message);
+    TransientMessage::information(this, ok ? "操作成功" : "操作失败", message);
     refresh();
 }

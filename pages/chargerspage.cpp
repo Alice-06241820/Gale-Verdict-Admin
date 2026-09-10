@@ -2,6 +2,7 @@
 
 #include "model/adminmodels.h"
 #include "service/adminapiservice.h"
+#include "ui/transientmessage.h"
 
 #include <QAbstractItemView>
 #include <QComboBox>
@@ -13,7 +14,6 @@
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QLabel>
-#include <QMessageBox>
 #include <QPushButton>
 #include <QTableWidget>
 #include <QTableWidgetItem>
@@ -121,7 +121,7 @@ ChargersPage::ChargersPage(AdminApiService *service, QWidget *parent)
         }
         QString message;
         const bool ok = service_->restartCharger(id, &message);
-        QMessageBox::information(this, ok ? "操作成功" : "操作失败", message);
+        TransientMessage::information(this, ok ? "操作成功" : "操作失败", message);
         refresh();
     });
 
@@ -241,7 +241,7 @@ void ChargersPage::openChargerEditor(int row)
                                                       typeCombo->currentText(),
                                                       powerSpin->value(),
                                                       &message);
-    QMessageBox::information(this, ok ? "保存成功" : "保存失败", message);
+    TransientMessage::information(this, ok ? "保存成功" : "保存失败", message);
     refresh();
     if (row >= 0 && row < table_->rowCount()) {
         table_->selectRow(row);

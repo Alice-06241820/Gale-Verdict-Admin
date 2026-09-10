@@ -291,7 +291,64 @@ QList<StationInfo> AdminApiService::stations() const
     return stations_;
 }
 
+QList<PlaceSuggestion> AdminApiService::suggestPlaces(const QString &keyword,
+                                                     const QString &region,
+                                                     QString *message) const
+{
+    QList<PlaceSuggestion> suggestions;
+    const QString trimmedKeyword = keyword.trimmed();
+    if (trimmedKeyword.size() < 2) {
+        if (message) {
+            *message = "请输入至少两个字符的地点关键字";
+        }
+        return suggestions;
+    }
+
+    QString path = QString("/api/map/suggestions?keyword=%1")
+                       .arg(QString::fromUtf8(
+                           QUrl::toPercentEncoding(trimmedKeyword)));
+    const QString trimmedRegion = region.trimmed();
+    if (!trimmedRegion.isEmpty()) {
+        path += QString("&region=%1")
+                    .arg(QString::fromUtf8(
+                        QUrl::toPercentEncoding(trimmedRegion)));
+    }
+
+    bool ok = false;
+    const QJsonDocument doc = getJson(path, &ok, message);
+    if (!ok || !doc.isObject()) {
+        if (message && message->isEmpty()) {
+            *message = "地点搜索失败，请确认后端服务与网络正常";
+        }
+        return suggestions;
+    }
+
+    const QJsonArray data = doc.object().value(QStringLiteral("data")).toArray();
+    for (const QJsonValue &value : data) {
+        const QJsonObject object = value.toObject();
+        const QJsonObject location =
+            object.value(QStringLiteral("location")).toObject();
+        PlaceSuggestion suggestion;
+        suggestion.title = object.value(QStringLiteral("title")).toString();
+        suggestion.address = object.value(QStringLiteral("address")).toString();
+        suggestion.latitude =
+            location.value(QStringLiteral("lat")).toDouble(999.0);
+        suggestion.longitude =
+            location.value(QStringLiteral("lng")).toDouble(999.0);
+        if (!suggestion.title.isEmpty() && suggestion.latitude >= -90.0
+            && suggestion.latitude <= 90.0 && suggestion.longitude >= -180.0
+            && suggestion.longitude <= 180.0) {
+            suggestions.append(suggestion);
+        }
+    }
+    if (suggestions.isEmpty() && message) {
+        *message = "没有找到匹配的地点";
+    }
+    return suggestions;
+}
+
 bool AdminApiService::addStation(const QString &name,
+                                 const QString &address,
                                  double latitude,
                                  double longitude,
                                  const QList<PointInput> &points,
@@ -301,6 +358,19 @@ bool AdminApiService::addStation(const QString &name,
     if (trimmedName.isEmpty()) {
         if (message) {
             *message = "站名不能为空";
+        }
+        return false;
+    }
+    const QString trimmedAddress = address.trimmed();
+    if (trimmedAddress.isEmpty()) {
+        if (message) {
+            *message = "请填写地址并从下拉建议中选择，以解析经纬度";
+        }
+        return false;
+    }
+    if (trimmedAddress.size() > 256) {
+        if (message) {
+            *message = "地址过长（最多 256 个字符）";
         }
         return false;
     }
@@ -341,6 +411,7 @@ bool AdminApiService::addStation(const QString &name,
 
     QJsonObject body;
     body["name"] = trimmedName;
+    body["address"] = trimmedAddress;
     body["latitude"] = latitude;
     body["longitude"] = longitude;
     body["points"] = pointsArray;
@@ -718,7 +789,7 @@ QList<StationInfo> AdminApiService::backendStations(bool *ok) const
         StationInfo station;
         station.id = stationJson.value("id").toInt();
         station.name = stationJson.value("name").toString();
-        station.address = "后端暂未返回地址";
+        station.address = stationJson.value(QStringLiteral("address")).toString();
         station.latitude = stationJson.value("latitude").toDouble();
         station.longitude = stationJson.value("longitude").toDouble();
         station.price = 0.0;

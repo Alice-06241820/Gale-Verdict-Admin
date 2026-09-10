@@ -2,10 +2,12 @@
 
 #include "model/adminmodels.h"
 #include "service/adminapiservice.h"
+#include "ui/transientmessage.h"
 
 #include <QAbstractItemView>
 #include <QAction>
 #include <QComboBox>
+#include <QCompleter>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
@@ -17,11 +19,12 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
-#include <QMessageBox>
 #include <QPushButton>
 #include <QSignalBlocker>
+#include <QStringListModel>
 #include <QTableWidget>
 #include <QTableWidgetItem>
+#include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
 
@@ -120,14 +123,98 @@ StationsPage::StationsPage(AdminApiService *service, QWidget *parent)
 
     nameEdit_ = new QLineEdit(formPanel);
     nameEdit_->setPlaceholderText("例如：大学城快充站");
-    latSpin_ = new QDoubleSpinBox(formPanel);
-    latSpin_->setRange(-90.0, 90.0);
-    latSpin_->setDecimals(6);
-    latSpin_->setValue(39.980000);
-    lngSpin_ = new QDoubleSpinBox(formPanel);
-    lngSpin_->setRange(-180.0, 180.0);
-    lngSpin_->setDecimals(6);
-    lngSpin_->setValue(116.320000);
+
+    cityEdit_ = new QLineEdit(formPanel);
+    cityEdit_->setText("北京市");
+    cityEdit_->setPlaceholderText("城市");
+    cityEdit_->setMaximumWidth(120);
+
+    addressEdit_ = new QLineEdit(formPanel);
+    addressEdit_->setPlaceholderText("输入地址后从下拉建议中选择，以解析经纬度");
+
+    suggestionModel_ = new QStringListModel(this);
+    completer_ = new QCompleter(suggestionModel_, this);
+    completer_->setCaseSensitivity(Qt::CaseInsensitive);
+    completer_->setFilterMode(Qt::MatchContains);
+    completer_->setCompletionMode(QCompleter::PopupCompletion);
+    addressEdit_->setCompleter(completer_);
+
+    addressStatusLabel_ = new QLabel("尚未解析坐标：请从地址建议中选择", formPanel);
+    addressStatusLabel_->setWordWrap(true);
+
+    suggestTimer_ = new QTimer(this);
+    suggestTimer_->setSingleShot(true);
+    suggestTimer_->setInterval(350);
+
+    connect(addressEdit_, &QLineEdit::textEdited, this, [this] {
+        addressResolved_ = false;
+        addressStatusLabel_->setText("尚未解析坐标：请从地址建议中选择");
+        suggestTimer_->start();
+    });
+    connect(suggestTimer_, &QTimer::timeout, this, [this] {
+        const QString keyword = addressEdit_->text().trimmed();
+        if (keyword.size() < 2) {
+            suggestionModel_->setStringList(QStringList());
+            return;
+        }
+        QString error;
+        const QList<PlaceSuggestion> suggestions =
+            service_->suggestPlaces(keyword, cityEdit_->text(), &error);
+        placeSuggestions_.clear();
+        QStringList display;
+        for (const PlaceSuggestion &suggestion : suggestions) {
+            placeSuggestions_.append(suggestion);
+            display << (suggestion.address.isEmpty()
+                            ? suggestion.title
+                            : QString("%1 · %2")
+                                  .arg(suggestion.title, suggestion.address));
+        }
+        suggestionModel_->setStringList(display);
+        if (display.isEmpty()) {
+            addressResolved_ = false;
+            if (!error.isEmpty()) {
+                addressStatusLabel_->setText(error);
+            }
+            return;
+        }
+        // 有候选时立即弹出下拉，并默认采用第一项（仍可从下拉换点），
+        // 与用户端导航页的交互保持一致。
+        completer_->complete();
+        const PlaceSuggestion &first = placeSuggestions_.first();
+        resolvedLat_ = first.latitude;
+        resolvedLng_ = first.longitude;
+        addressResolved_ = true;
+        addressEdit_->setText(first.title);
+        addressStatusLabel_->setText(
+            QString("已匹配地址：%1（坐标 %2, %3），如需更换请从下拉选择")
+                .arg(first.title)
+                .arg(resolvedLat_, 0, 'f', 6)
+                .arg(resolvedLng_, 0, 'f', 6));
+    });
+    connect(completer_,
+            QOverload<const QString &>::of(&QCompleter::activated), this,
+            [this](const QString &display) {
+                for (const PlaceSuggestion &suggestion : placeSuggestions_) {
+                    const QString text =
+                        suggestion.address.isEmpty()
+                            ? suggestion.title
+                            : QString("%1 · %2")
+                                  .arg(suggestion.title, suggestion.address);
+                    if (text == display) {
+                        resolvedLat_ = suggestion.latitude;
+                        resolvedLng_ = suggestion.longitude;
+                        addressResolved_ = true;
+                        addressEdit_->setText(suggestion.title);
+                        addressStatusLabel_->setText(
+                            QString("已匹配地址：%1（坐标 %2, %3）")
+                                .arg(suggestion.title)
+                                .arg(resolvedLat_, 0, 'f', 6)
+                                .arg(resolvedLng_, 0, 'f', 6));
+                        return;
+                    }
+                }
+            });
+
     auto *submitButton = new QPushButton("新增电站", formPanel);
     submitButton->setObjectName("primaryButton");
 
@@ -199,8 +286,9 @@ StationsPage::StationsPage(AdminApiService *service, QWidget *parent)
     pointRow->addWidget(pointExpandButton_);
 
     formLayout->addRow("站名", nameEdit_);
-    formLayout->addRow("纬度", latSpin_);
-    formLayout->addRow("经度", lngSpin_);
+    formLayout->addRow("城市", cityEdit_);
+    formLayout->addRow("地址", addressEdit_);
+    formLayout->addRow(QString(), addressStatusLabel_);
     formLayout->addRow("电桩明细", pointRow);
     formLayout->addRow(submitButton);
     content->addWidget(formPanel, 0, 1);
@@ -432,18 +520,37 @@ void StationsPage::rebuildPointMenu(QMenu *menu)
 
 void StationsPage::submitStation()
 {
+    const QString name = nameEdit_->text().trimmed();
+    const QString address = addressEdit_->text().trimmed();
+    if (name.isEmpty()) {
+        TransientMessage::information(this, "无法添加", "请填写站名");
+        return;
+    }
+    if (address.isEmpty()) {
+        TransientMessage::information(this, "无法添加", "请填写地址并从下拉建议中选择");
+        return;
+    }
+    if (!addressResolved_) {
+        TransientMessage::information(
+            this, "无法添加",
+            "请从地址下拉建议中选择一个地点，以便解析经纬度（地址框的输入文本不会直接使用）");
+        return;
+    }
+
     syncEditorToInput();
     QList<PointInput> points = pointInputs_;
 
     QString message;
-    const bool ok = service_->addStation(nameEdit_->text(),
-                                         latSpin_->value(),
-                                         lngSpin_->value(),
-                                         points,
-                                         &message);
-    QMessageBox::information(this, ok ? "新增成功" : "新增失败", message);
+    const bool ok = service_->addStation(name, address, resolvedLat_,
+                                         resolvedLng_, points, &message);
+    TransientMessage::information(this, ok ? "新增成功" : "新增失败", message);
     if (ok) {
         nameEdit_->clear();
+        addressEdit_->clear();
+        suggestionModel_->setStringList(QStringList());
+        placeSuggestions_.clear();
+        addressResolved_ = false;
+        addressStatusLabel_->setText("尚未解析坐标：请从地址建议中选择");
         pointInputs_.clear();
         pointInputs_.append(PointInput{"DC", 60.0});
         currentPointIndex_ = 0;
@@ -456,7 +563,7 @@ void StationsPage::openChargerEditor(int row)
 {
     const int stationRow = stationTable_->currentRow();
     if (row < 0 || row >= detailTable_->rowCount() || !detailTable_->item(row, 0)) {
-        QMessageBox::warning(this, "保存失败", "请先选择需要修改的电桩");
+        TransientMessage::warning(this, "保存失败", "请先选择需要修改的电桩");
         return;
     }
 
@@ -519,7 +626,7 @@ void StationsPage::openChargerEditor(int row)
                                                       typeCombo->currentText(),
                                                       powerSpin->value(),
                                                       &message);
-    QMessageBox::information(this, ok ? "保存成功" : "保存失败", message);
+    TransientMessage::information(this, ok ? "保存成功" : "保存失败", message);
     if (ok) {
         refresh();
         if (stationRow >= 0 && stationRow < stationTable_->rowCount()) {
