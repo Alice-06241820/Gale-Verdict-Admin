@@ -36,6 +36,7 @@
 #include <QTime>
 #include <QVBoxLayout>
 #include <QEasingCurve>
+#include <QPointer>
 #include <QVariantAnimation>
 #include <QtMath>
 #include <cmath>
@@ -111,6 +112,16 @@ bool prefersReducedMotion()
 
     return qEnvironmentVariableIntValue("QT_REDUCED_MOTION") > 0
         || qEnvironmentVariableIntValue("QT_DISABLE_ANIMATIONS") > 0;
+}
+
+void stopVariantAnimation(QVariantAnimation **animation)
+{
+    if (!animation || !*animation) {
+        return;
+    }
+    (*animation)->stop();
+    (*animation)->deleteLater();
+    *animation = nullptr;
 }
 
 QPointF pointOnCircle(const QPointF &center, qreal radius, qreal degrees)
@@ -1004,6 +1015,9 @@ QLabel *DashboardPage::createMetric(const QString &title)
 
 void DashboardPage::updateChart(int days)
 {
+    // 重建图表前先停掉上一轮的绘制动画（旧 chart/series 会被 setChart 释放）。
+    stopVariantAnimation(&trendRevealAnimation_);
+
     const QString defaultHint = "提示：鼠标在图中移动可预览当天营收，点击可固定查看详细数值。";
 
     auto *curve = new QSplineSeries();
@@ -1058,11 +1072,13 @@ void DashboardPage::updateChart(int days)
         return static_cast<qreal>(QDateTime(date, QTime(0, 0)).toMSecsSinceEpoch());
     };
 
+    // 曲线/散点的数据先收集，稍后由 reveal 动画按进度逐段填充（从左往右绘制）。
+    QVector<QPointF> curvePoints;
+    curvePoints.reserve(points.size());
     double maxValue = 0.0;
     for (int i = 0; i < points.size(); ++i) {
         const qreal x = xValueForDate(points[i].date);
-        curve->append(x, points[i].amount);
-        pointsSeries->append(x, points[i].amount);
+        curvePoints.append(QPointF(x, points[i].amount));
         maxValue = qMax(maxValue, points[i].amount);
     }
 
@@ -1158,6 +1174,71 @@ void DashboardPage::updateChart(int days)
     selectedSeries->attachAxis(axisX);
     selectedSeries->attachAxis(axisY);
     chartView_->setChart(chart);
+
+    // 趋势曲线：从左往右绘制。节奏与环状图 reveal 一致（1050ms / OutCubic），
+    // 末端按 x 插值以保证平滑生长而非逐点跳动。
+    if (!curvePoints.isEmpty()) {
+        const qreal xStart = curvePoints.first().x();
+        const qreal xEnd = curvePoints.last().x();
+        QPointer<QSplineSeries> curveGuard(curve);
+        QPointer<QScatterSeries> pointsGuard(pointsSeries);
+        if (prefersReducedMotion() || xEnd <= xStart) {
+            for (const QPointF &point : curvePoints) {
+                if (curveGuard) curveGuard->append(point);
+                if (pointsGuard) pointsGuard->append(point);
+            }
+        } else {
+            if (curveGuard) curveGuard->append(curvePoints.first());
+            if (pointsGuard) pointsGuard->append(curvePoints.first());
+
+            auto *reveal = new QVariantAnimation(this);
+            trendRevealAnimation_ = reveal;
+            reveal->setDuration(1050);
+            reveal->setStartValue(0.0);
+            reveal->setEndValue(1.0);
+            reveal->setEasingCurve(QEasingCurve::OutCubic);
+            connect(reveal, &QVariantAnimation::valueChanged, this,
+                    [curveGuard, pointsGuard, curvePoints, xStart, xEnd](
+                        const QVariant &value) {
+                if (!curveGuard || !pointsGuard) {
+                    return;
+                }
+                const qreal limit = xStart + (xEnd - xStart) * value.toReal();
+                QVector<QPointF> visible;
+                for (const QPointF &point : curvePoints) {
+                    if (point.x() <= limit) {
+                        visible.append(point);
+                    }
+                }
+                if (visible.isEmpty()) {
+                    visible.append(curvePoints.first());
+                }
+                if (visible.size() < curvePoints.size()) {
+                    const QPointF last = visible.last();
+                    const QPointF next = curvePoints.at(visible.size());
+                    const qreal span = next.x() - last.x();
+                    if (span > 0.0) {
+                        const qreal ratio = (limit - last.x()) / span;
+                        visible.append(QPointF(
+                            limit, last.y() + (next.y() - last.y()) * ratio));
+                    }
+                }
+                curveGuard->clear();
+                pointsGuard->clear();
+                for (const QPointF &point : visible) {
+                    curveGuard->append(point);
+                    pointsGuard->append(point);
+                }
+            });
+            connect(reveal, &QVariantAnimation::finished, this, [this]() {
+                if (trendRevealAnimation_) {
+                    trendRevealAnimation_->deleteLater();
+                    trendRevealAnimation_ = nullptr;
+                }
+            });
+            reveal->start();
+        }
+    }
 
     auto updateBadge = [chart, points, xValueForDate](QGraphicsPathItem *badgeBox,
                                                       QGraphicsSimpleTextItem *badgeText,

@@ -9,6 +9,7 @@
 class AdminApiService;
 class QLabel;
 class QComboBox;
+class QVariantAnimation;
 
 #ifdef QT_CHARTS_NAMESPACE
 using DashboardChartView = QT_CHARTS_NAMESPACE::QChartView;
@@ -40,6 +41,8 @@ private:
     QWidget *deviceChartView_ = nullptr;
     QLabel *chartHint_ = nullptr;
     int selectedRevenueIndex_ = -1;
+    // 趋势曲线"从左往右"绘制动画（与环状图 reveal 同一节奏）。
+    QVariantAnimation *trendRevealAnimation_ = nullptr;
 };
 
 #endif // DASHBOARDPAGE_H
