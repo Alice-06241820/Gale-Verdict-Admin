@@ -14,7 +14,8 @@ SOURCES += \
     pages/chargerspage.cpp \
     pages/stationspage.cpp \
     pages/userspage.cpp \
-    ui/transientmessage.cpp
+    ui/transientmessage.cpp \
+    ui/motion.cpp
 
 HEADERS += \
     mainwindow.h \
@@ -25,7 +26,8 @@ HEADERS += \
     pages/chargerspage.h \
     pages/stationspage.h \
     pages/userspage.h \
-    ui/transientmessage.h
+    ui/transientmessage.h \
+    ui/motion.h
 
 RESOURCES += resources.qrc
 

@@ -508,3 +508,9 @@ QListView#addressSuggestionPopup::item:selected {
     background-color: #d84b35;
     color: #fffaf4;
 }
+
+/* ---- 侧边栏当前页面指示条：随页面切换滑动（对应客户端底部导航指示条） ---- */
+QWidget#sidebarIndicator {
+    background-color: #d84b35;
+    border-radius: 2px;
+}

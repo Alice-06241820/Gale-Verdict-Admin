@@ -10,9 +10,9 @@ class QWidget;
 namespace TransientMessage {
 
 void information(QWidget *parent, const QString &title, const QString &message,
-                 int timeoutMs = 3200);
+                 int timeoutMs = 2600);
 void warning(QWidget *parent, const QString &title, const QString &message,
-             int timeoutMs = 2600);
+             int timeoutMs = 3200);
 
 } // namespace TransientMessage
 

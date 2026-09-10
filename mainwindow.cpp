@@ -5,10 +5,15 @@
 #include "pages/loginpage.h"
 #include "pages/stationspage.h"
 #include "pages/userspage.h"
+#include "ui/motion.h"
 
+#include <QAbstractAnimation>
 #include <QApplication>
+#include <QEasingCurve>
+#include <QEvent>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QPropertyAnimation>
 #include <QPushButton>
 #include <QStackedWidget>
 #include <QVBoxLayout>
@@ -56,16 +61,16 @@ void MainWindow::showShell()
     root->setContentsMargins(0, 0, 0, 0);
     root->setSpacing(0);
 
-    auto *sidebar = new QWidget(shellContainer_);
-    sidebar->setObjectName("sidebar");
-    sidebar->setFixedWidth(240);
-    auto *sideLayout = new QVBoxLayout(sidebar);
+    sidebar_ = new QWidget(shellContainer_);
+    sidebar_->setObjectName("sidebar");
+    sidebar_->setFixedWidth(240);
+    auto *sideLayout = new QVBoxLayout(sidebar_);
     sideLayout->setContentsMargins(20, 24, 20, 20);
     sideLayout->setSpacing(8);
 
-    auto *brand = new QLabel("Gale Verdict", sidebar);
+    auto *brand = new QLabel("Gale Verdict", sidebar_);
     brand->setObjectName("brandTitle");
-    auto *role = new QLabel("运营管理端", sidebar);
+    auto *role = new QLabel("运营管理端", sidebar_);
     role->setObjectName("brandSubtitle");
     sideLayout->addWidget(brand);
     sideLayout->addWidget(role);
@@ -76,7 +81,7 @@ void MainWindow::showShell()
     sideLayout->addWidget(createNavButton("用户管理", PageUsers));
     sideLayout->addStretch();
 
-    auto *logoutButton = new QPushButton("退出登录", sidebar);
+    auto *logoutButton = new QPushButton("退出登录", sidebar_);
     logoutButton->setObjectName("secondaryButton");
     sideLayout->addWidget(logoutButton);
 
@@ -91,7 +96,14 @@ void MainWindow::showShell()
     stack_->addWidget(static_cast<QWidget *>(stationsPage_));
     stack_->addWidget(static_cast<QWidget *>(usersPage_));
 
-    root->addWidget(sidebar);
+    // 侧边栏：当前页面指示条（竖直滑动条，与客户端底部导航指示条同一套动效语言）。
+    sidebarIndicator_ = new QWidget(sidebar_);
+    sidebarIndicator_->setObjectName("sidebarIndicator");
+    sidebarIndicator_->setAttribute(Qt::WA_StyledBackground, true);
+    sidebarIndicator_->hide();
+    sidebar_->installEventFilter(this);
+
+    root->addWidget(sidebar_);
     root->addWidget(stack_, 1);
 
     setCentralWidget(shellContainer_);
@@ -118,8 +130,14 @@ void MainWindow::setPage(PageIndex page)
         return;
     }
 
+    QWidget *pageWidget = stack_->widget(page);
     stack_->setCurrentIndex(page);
     updateNavState(page);
+    // 页面切换统一淡入；「经营总览」含 QChartView，跳过以免图表离屏渲染异常。
+    if (pageWidget != nullptr
+        && pageWidget != static_cast<QWidget *>(dashboardPage_)) {
+        Motion::fadeIn(pageWidget, Motion::kNormalMs);
+    }
 
     switch (page) {
     case PageDashboard:
@@ -142,4 +160,51 @@ void MainWindow::updateNavState(PageIndex page)
     for (int i = 0; i < navButtons_.size(); ++i) {
         navButtons_[i]->setChecked(i == page);
     }
+    updateSidebarIndicator(true);
+}
+
+void MainWindow::updateSidebarIndicator(bool animate)
+{
+    if (!sidebarIndicator_ || !sidebar_) {
+        return;
+    }
+    QPushButton *current = nullptr;
+    for (QPushButton *button : navButtons_) {
+        if (button->isChecked()) {
+            current = button;
+            break;
+        }
+    }
+    if (!current || !sidebar_->isVisible()) {
+        sidebarIndicator_->hide();
+        return;
+    }
+
+    const QRect buttonRect = current->geometry();
+    const QRect target(8, buttonRect.top() + 8, 3,
+                       qMax(18, buttonRect.height() - 16));
+
+    // 首次出现时直接对齐，避免从 (0,0) 滑入的突兀感。
+    const bool firstAppearance = !sidebarIndicator_->isVisible();
+    sidebarIndicator_->show();
+    sidebarIndicator_->raise();
+    if (!animate || firstAppearance) {
+        sidebarIndicator_->setGeometry(target);
+        return;
+    }
+    auto *animation =
+        new QPropertyAnimation(sidebarIndicator_, "geometry", this);
+    animation->setDuration(Motion::kNormalMs);
+    animation->setStartValue(sidebarIndicator_->geometry());
+    animation->setEndValue(target);
+    animation->setEasingCurve(QEasingCurve::OutCubic);
+    animation->start(QAbstractAnimation::DeleteWhenStopped);
+}
+
+bool MainWindow::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched == sidebar_ && event->type() == QEvent::Resize) {
+        updateSidebarIndicator(false);
+    }
+    return QMainWindow::eventFilter(watched, event);
 }
