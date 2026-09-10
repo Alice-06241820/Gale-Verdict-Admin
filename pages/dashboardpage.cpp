@@ -37,7 +37,9 @@
 #include <QVBoxLayout>
 #include <QEasingCurve>
 #include <QPointer>
+#include <QHash>
 #include <QVariantAnimation>
+#include <QVector>
 #include <QtMath>
 #include <cmath>
 #include <functional>
@@ -265,13 +267,13 @@ public:
 
     ~DeviceDonutChart() override
     {
-        stopAnimation(&hoverAnimation_);
+        stopAllSliceAnimations();
         stopAnimation(&revealAnimation_);
     }
 
     void setSlices(const QList<DonutSlice> &slices)
     {
-        stopAnimation(&hoverAnimation_);
+        stopAllSliceAnimations();
         stopAnimation(&revealAnimation_);
         slices_ = slices;
         total_ = 0;
@@ -283,7 +285,8 @@ public:
         }
         hoveredIndex_ = -1;
         activeIndex_ = -1;
-        hoverScale_ = 1.0;
+        fadingIndex_ = -1;
+        sliceScales_ = QVector<qreal>(slices_.size(), 1.0);
         revealProgress_ = prefersReducedMotion() ? 1.0 : 0.0;
         syncActiveIndex(false);
         startRevealAnimation();
@@ -393,14 +396,17 @@ private:
                 continue;
             }
 
-            const bool hovered = (i == activeIndex_);
-            const qreal scale = hovered ? hoverScale_ : 1.0;
+            // 每块独立缩放：切换焦点时旧块缩回、新块放大可同时进行；
+            // 高亮程度由缩放值反推，透明度随之平滑过渡。
+            const qreal scale = sliceScales_.value(i, 1.0);
+            const qreal highlight =
+                qBound<qreal>(0.0, (scale - 1.0) / (kHoverScale - 1.0), 1.0);
             const qreal pieceOuter = outerRadius * scale;
             const qreal pieceInner = innerRadius * scale;
             const QPainterPath path = buildDonutSlicePath(center, pieceOuter, pieceInner, current, revealed);
 
             painter->save();
-            painter->setOpacity(activeIndex_ >= 0 && i != activeIndex_ ? 0.58 : 1.0);
+            painter->setOpacity(anyHighlight() ? 0.58 + 0.42 * highlight : 1.0);
             painter->setBrush(slice.brush);
             painter->setPen(Qt::NoPen);
             painter->drawPath(path);
@@ -424,7 +430,7 @@ private:
         painter->save();
         painter->setRenderHint(QPainter::Antialiasing);
         painter->setPen(QPen(kCardBackground, kGapPx, Qt::SolidLine, Qt::FlatCap, Qt::RoundJoin));
-        const qreal separatorOuterRadius = outerRadius * (activeIndex_ >= 0 ? hoverScale_ : 1.0);
+        const qreal separatorOuterRadius = outerRadius * sliceScales_.value(activeIndex_, 1.0);
 
         qreal current = baseStart;
         qreal consumed = 0.0;
@@ -782,63 +788,96 @@ private:
     void syncActiveIndex(bool animate)
     {
         const int nextActiveIndex = hoveredIndex_ >= 0 ? hoveredIndex_ : pinnedIndex_;
-        if (nextActiveIndex == activeIndex_ && hoveredIndex_ >= 0) {
-            if (animate && !prefersReducedMotion()) {
-                const qreal targetScale = nextActiveIndex >= 0 ? kHoverScale : 1.0;
-                if (qAbs(hoverScale_ - targetScale) > 0.001) {
-                    stopAnimation(&hoverAnimation_);
-                    hoverAnimation_ = new QVariantAnimation(this);
-                    hoverAnimation_->setDuration(static_cast<int>(kHoverAnimationDurationMs));
-                    hoverAnimation_->setStartValue(hoverScale_);
-                    hoverAnimation_->setEndValue(targetScale);
-                    hoverAnimation_->setEasingCurve(QEasingCurve::OutCubic);
-                    connect(hoverAnimation_, &QVariantAnimation::valueChanged, this, [this](const QVariant &value) {
-                        hoverScale_ = value.toReal();
-                        update();
-                    });
-                    connect(hoverAnimation_, &QVariantAnimation::finished, this, [this]() {
-                        if (hoverAnimation_) {
-                            hoverAnimation_->deleteLater();
-                            hoverAnimation_ = nullptr;
-                        }
-                    });
-                    hoverAnimation_->start();
-                    return;
-                }
-            }
+        if (nextActiveIndex == activeIndex_) {
+            return;
         }
 
-        if (activeIndex_ != nextActiveIndex) {
-            activeIndex_ = nextActiveIndex;
-            if (hoveredIndex_ < 0 && activeIndex_ < 0) {
-                hoverScale_ = 1.0;
+        // 旧块缩回与新块放大并行进行：焦点切换不再"硬跳"，
+        // 鼠标在相邻扇区之间滑动时高亮可以直接交接。
+        const int previousIndex = activeIndex_;
+        activeIndex_ = nextActiveIndex;
+
+        if (previousIndex >= 0 && previousIndex != activeIndex_) {
+            fadingIndex_ = previousIndex;
+            animateSliceScale(previousIndex, 1.0, animate);
+        }
+        if (activeIndex_ >= 0) {
+            if (fadingIndex_ == activeIndex_) {
+                fadingIndex_ = -1;
+            }
+            animateSliceScale(activeIndex_, kHoverScale, animate);
+        }
+        update();
+    }
+
+    bool anyHighlight() const
+    {
+        return activeIndex_ >= 0 || fadingIndex_ >= 0;
+    }
+
+    void stopAllSliceAnimations()
+    {
+        for (auto it = sliceAnimations_.begin(); it != sliceAnimations_.end(); ++it) {
+            if (it.value()) {
+                it.value()->stop();
+                it.value()->deleteLater();
             }
         }
+        sliceAnimations_.clear();
+    }
 
-        stopAnimation(&hoverAnimation_);
-        if (prefersReducedMotion() || !animate) {
-            hoverScale_ = activeIndex_ >= 0 ? kHoverScale : 1.0;
+    // 单块缩放动画：target 为 1.0（缩回）或 kHoverScale（放大）。
+    void animateSliceScale(int index, qreal target, bool animate)
+    {
+        if (index < 0 || index >= sliceScales_.size()) {
+            return;
+        }
+        if (auto running = sliceAnimations_.find(index);
+            running != sliceAnimations_.end()) {
+            if (running.value()) {
+                running.value()->stop();
+                running.value()->deleteLater();
+            }
+            sliceAnimations_.erase(running);
+        }
+
+        const qreal start = sliceScales_.value(index, 1.0);
+        if (!animate || prefersReducedMotion() || qAbs(start - target) < 0.001) {
+            sliceScales_[index] = target;
+            if (index == fadingIndex_) {
+                fadingIndex_ = -1;
+            }
             update();
             return;
         }
 
-        const qreal targetScale = activeIndex_ >= 0 ? kHoverScale : 1.0;
-        hoverAnimation_ = new QVariantAnimation(this);
-        hoverAnimation_->setDuration(static_cast<int>(kHoverAnimationDurationMs));
-        hoverAnimation_->setStartValue(hoverScale_);
-        hoverAnimation_->setEndValue(targetScale);
-        hoverAnimation_->setEasingCurve(QEasingCurve::OutCubic);
-        connect(hoverAnimation_, &QVariantAnimation::valueChanged, this, [this](const QVariant &value) {
-            hoverScale_ = value.toReal();
-            update();
-        });
-        connect(hoverAnimation_, &QVariantAnimation::finished, this, [this]() {
-            if (hoverAnimation_) {
-                hoverAnimation_->deleteLater();
-                hoverAnimation_ = nullptr;
+        auto *animation = new QVariantAnimation(this);
+        sliceAnimations_.insert(index, animation);
+        animation->setDuration(static_cast<int>(kHoverAnimationDurationMs));
+        animation->setStartValue(start);
+        animation->setEndValue(target);
+        animation->setEasingCurve(QEasingCurve::OutCubic);
+        connect(animation, &QVariantAnimation::valueChanged, this,
+                [this, index](const QVariant &value) {
+            if (index < sliceScales_.size()) {
+                sliceScales_[index] = value.toReal();
+                update();
             }
         });
-        hoverAnimation_->start();
+        connect(animation, &QVariantAnimation::finished, this, [this, index]() {
+            if (auto it = sliceAnimations_.find(index);
+                it != sliceAnimations_.end()) {
+                if (it.value()) {
+                    it.value()->deleteLater();
+                }
+                sliceAnimations_.erase(it);
+            }
+            if (fadingIndex_ == index) {
+                fadingIndex_ = -1;
+                update();
+            }
+        });
+        animation->start();
     }
 
     int activeDetailIndex() const
@@ -895,9 +934,10 @@ private:
     int hoveredIndex_ = -1;
     int activeIndex_ = -1;
     int pinnedIndex_ = -1;
-    qreal hoverScale_ = 1.0;
+    QVector<qreal> sliceScales_;                       // 每块当前缩放（高亮程度）
+    QHash<int, QVariantAnimation *> sliceAnimations_;  // 每块独立的缩放动画
+    int fadingIndex_ = -1;                             // 正在缩回的块
     qreal revealProgress_ = 1.0;
-    QVariantAnimation *hoverAnimation_ = nullptr;
     QVariantAnimation *revealAnimation_ = nullptr;
 };
 }
