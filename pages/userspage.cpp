@@ -152,6 +152,10 @@ void UsersPage::setSelectedFrozen(bool frozen)
 
     QString message;
     const bool ok = service_->setUserFrozen(userId, frozen, &message);
-    TransientMessage::information(this, ok ? "操作成功" : "操作失败", message);
+    if (ok) {
+        TransientMessage::information(this, "操作成功", message);
+    } else {
+        TransientMessage::warning(this, "操作失败", message);
+    }
     refresh();
 }

@@ -20,8 +20,8 @@ QFrame *createToast(QWidget *parent, const QString &title,
     toast->setAttribute(Qt::WA_DeleteOnClose);
 
     auto *layout = new QVBoxLayout(toast);
-    layout->setContentsMargins(12, 8, 12, 8);
-    layout->setSpacing(3);
+    layout->setContentsMargins(18, 14, 18, 14);
+    layout->setSpacing(6);
 
     auto *titleLabel = new QLabel(title, toast);
     titleLabel->setObjectName(QStringLiteral("toastTitle"));
@@ -33,7 +33,7 @@ QFrame *createToast(QWidget *parent, const QString &title,
     layout->addWidget(messageLabel);
 
     const int availableWidth = parent ? parent->width() - 32 : 320;
-    toast->setFixedWidth(qBound(240, availableWidth, 340));
+    toast->setFixedWidth(qBound(300, availableWidth, 460));
     toast->adjustSize();
     if (parent) {
         toast->move(qMax(16, (parent->width() - toast->width()) / 2),

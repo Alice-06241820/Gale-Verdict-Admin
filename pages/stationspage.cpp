@@ -137,6 +137,7 @@ StationsPage::StationsPage(AdminApiService *service, QWidget *parent)
     completer_->setCaseSensitivity(Qt::CaseInsensitive);
     completer_->setFilterMode(Qt::MatchContains);
     completer_->setCompletionMode(QCompleter::PopupCompletion);
+    completer_->popup()->setObjectName(QStringLiteral("addressSuggestionPopup"));
     addressEdit_->setCompleter(completer_);
 
     addressStatusLabel_ = new QLabel("尚未解析坐标：请从地址建议中选择", formPanel);
@@ -523,15 +524,15 @@ void StationsPage::submitStation()
     const QString name = nameEdit_->text().trimmed();
     const QString address = addressEdit_->text().trimmed();
     if (name.isEmpty()) {
-        TransientMessage::information(this, "无法添加", "请填写站名");
+        TransientMessage::warning(this, "无法添加", "请填写站名");
         return;
     }
     if (address.isEmpty()) {
-        TransientMessage::information(this, "无法添加", "请填写地址并从下拉建议中选择");
+        TransientMessage::warning(this, "无法添加", "请填写地址并从下拉建议中选择");
         return;
     }
     if (!addressResolved_) {
-        TransientMessage::information(
+        TransientMessage::warning(
             this, "无法添加",
             "请从地址下拉建议中选择一个地点，以便解析经纬度（地址框的输入文本不会直接使用）");
         return;
@@ -543,7 +544,11 @@ void StationsPage::submitStation()
     QString message;
     const bool ok = service_->addStation(name, address, resolvedLat_,
                                          resolvedLng_, points, &message);
-    TransientMessage::information(this, ok ? "新增成功" : "新增失败", message);
+    if (ok) {
+        TransientMessage::information(this, "新增成功", message);
+    } else {
+        TransientMessage::warning(this, "新增失败", message);
+    }
     if (ok) {
         nameEdit_->clear();
         addressEdit_->clear();
@@ -626,7 +631,11 @@ void StationsPage::openChargerEditor(int row)
                                                       typeCombo->currentText(),
                                                       powerSpin->value(),
                                                       &message);
-    TransientMessage::information(this, ok ? "保存成功" : "保存失败", message);
+    if (ok) {
+        TransientMessage::information(this, "保存成功", message);
+    } else {
+        TransientMessage::warning(this, "保存失败", message);
+    }
     if (ok) {
         refresh();
         if (stationRow >= 0 && stationRow < stationTable_->rowCount()) {

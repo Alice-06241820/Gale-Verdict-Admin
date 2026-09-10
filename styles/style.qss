@@ -452,12 +452,12 @@ QMenu::indicator {
 QFrame#transientToast {
     color: #1f1d1a;
     background-color: #fbfaf7;
-    border: 1px solid #d8d0c7;
-    border-radius: 14px;
+    border: 2px solid #c9c0b5;
+    border-radius: 16px;
 }
 QFrame#transientToast[messageType="warning"] {
-    border: 1px solid #d84b35;
-    background-color: #fbfaf7;
+    border: 2px solid #d84b35;
+    background-color: #fff6f3;
 }
 QFrame#transientToast QLabel {
     border: 0;
@@ -465,13 +465,46 @@ QFrame#transientToast QLabel {
 }
 QFrame#transientToast QLabel#toastTitle {
     color: #1f1d1a;
+    font-size: 16px;
+    font-weight: 700;
+}
+QFrame#transientToast QLabel#toastMessage {
+    color: #33302c;
+    font-size: 14px;
     font-weight: 700;
 }
 QFrame#transientToast[messageType="warning"] QLabel#toastTitle {
-    color: #d84b35;
+    color: #c0392b;
+}
+QFrame#transientToast[messageType="warning"] QLabel#toastMessage {
+    color: #c0392b;
+    font-weight: 700;
 }
 QFrame#transientToast QPushButton {
     min-height: 0px;
-    padding: 4px 14px;
+    padding: 5px 18px;
     border-radius: 10px;
+}
+
+/* ---- 下拉弹出列表：电桩类型下拉与地址联想保持同一风格 ---- */
+QComboBox QAbstractItemView,
+QListView#addressSuggestionPopup {
+    background-color: #fbfaf7;
+    color: #1f1d1a;
+    border: 1px solid #d8d0c7;
+    border-radius: 10px;
+    padding: 4px;
+    outline: 0;
+}
+QComboBox QAbstractItemView::item,
+QListView#addressSuggestionPopup::item {
+    min-height: 26px;
+    padding: 5px 10px;
+    border-radius: 6px;
+    color: #1f1d1a;
+}
+QComboBox QAbstractItemView::item:selected,
+QListView#addressSuggestionPopup::item:selected {
+    background-color: #d84b35;
+    color: #fffaf4;
 }
